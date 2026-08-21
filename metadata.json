@@ -1,0 +1,7 @@
+{
+  "name": "PromoCombustible",
+  "description": "Mapa interactivo de promociones por tarjetas y bancos, ofertas locales y comparador en tiempo real de precios de combustibles cercanos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
