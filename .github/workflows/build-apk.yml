@@ -47,7 +47,7 @@ jobs:
             base64 -d debug.keystore.base64 > debug.keystore || true
           fi
 
-          # Grant execution permissions
+          # Ensure gradlew executable permissions
           if [ -f gradlew ]; then
             chmod +x gradlew
           fi
@@ -55,9 +55,9 @@ jobs:
       - name: Build Debug APK with Gradle
         run: |
           if [ -f gradlew ]; then
-            ./gradlew assembleDebug --no-daemon --no-configuration-cache -Pksp.useKSP2=true -Dkotlin.compiler.execution.strategy=daemon --stacktrace
+            ./gradlew assembleDebug --no-daemon --stacktrace --info
           else
-            gradle assembleDebug --no-daemon --no-configuration-cache -Pksp.useKSP2=true -Dkotlin.compiler.execution.strategy=daemon --stacktrace
+            gradle assembleDebug --no-daemon --stacktrace --info
           fi
 
       - name: Upload Debug APK Artifact
