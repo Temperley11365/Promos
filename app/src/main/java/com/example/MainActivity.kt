@@ -1,9 +1,15 @@
 package com.example
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,11 +33,14 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.AppTab
@@ -58,6 +67,8 @@ class MainActivity : ComponentActivity() {
 fun PromoCombustibleApp(
     viewModel: MainViewModel = viewModel()
 ) {
+    val context = LocalContext.current
+
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val currentLocation by viewModel.currentLocation.collectAsStateWithLifecycle()
     val locationModeName by viewModel.locationModeName.collectAsStateWithLifecycle()
@@ -79,6 +90,70 @@ fun PromoCombustibleApp(
     val savingsRankings by viewModel.savingsSimulationResults.collectAsStateWithLifecycle()
     val calcAmount by viewModel.calcAmount.collectAsStateWithLifecycle()
     val calcCategory by viewModel.calcCategory.collectAsStateWithLifecycle()
+    val isProximityAlertsEnabled by viewModel.isProximityAlertsEnabled.collectAsStateWithLifecycle()
+    val fcmToken by viewModel.fcmToken.collectAsStateWithLifecycle()
+    val firestoreSyncStatus by viewModel.firestoreSyncStatus.collectAsStateWithLifecycle()
+
+    // Permissions Launchers
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+
+        if (fineLocationGranted || coarseLocationGranted) {
+            viewModel.requestDeviceGpsLocation(
+                onSuccess = {
+                    Toast.makeText(context, "Ubicación GPS obtenida con éxito", Toast.LENGTH_SHORT).show()
+                },
+                onError = {
+                    Toast.makeText(context, "No se pudo obtener el GPS: $it", Toast.LENGTH_SHORT).show()
+                }
+            )
+        } else {
+            Toast.makeText(context, "Permiso de ubicación denegado. Usando zona seleccionada.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            Toast.makeText(context, "Notificaciones habilitadas", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Check notification permission on Android 13+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    fun requestGpsLocation() {
+        val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+        if (hasFine || hasCoarse) {
+            viewModel.requestDeviceGpsLocation(
+                onSuccess = {
+                    Toast.makeText(context, "Ubicación GPS actualizada", Toast.LENGTH_SHORT).show()
+                },
+                onError = { error ->
+                    Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                }
+            )
+        } else {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -208,6 +283,9 @@ fun PromoCombustibleApp(
                         onSelectLocation = { point, name, isGps ->
                             viewModel.setLocation(point, name, isGps)
                         },
+                        onRequestGpsLocation = {
+                            requestGpsLocation()
+                        },
                         onSetRadius = { viewModel.setRadius(it) },
                         onSetSearchQuery = { viewModel.setSearchQuery(it) },
                         onSetCategory = { viewModel.setCategory(it) },
@@ -222,6 +300,8 @@ fun PromoCombustibleApp(
 
                 AppTab.PROMOTIONS -> {
                     PromotionsScreen(
+                        currentLocation = currentLocation,
+                        searchRadiusKm = searchRadiusKm,
                         promotions = promotions,
                         searchQuery = searchQuery,
                         selectedCategory = selectedCategory,
@@ -263,6 +343,9 @@ fun PromoCombustibleApp(
                         calcCategory = calcCategory,
                         savingsRankings = savingsRankings,
                         favoriteIds = favoriteIds,
+                        isProximityAlertsEnabled = isProximityAlertsEnabled,
+                        fcmToken = fcmToken,
+                        firestoreSyncStatus = firestoreSyncStatus,
                         onSetCalcAmount = { viewModel.setCalcAmount(it) },
                         onSetCalcCategory = { viewModel.setCalcCategory(it) },
                         onAddCard = { bank, type, net, name, last4 ->
@@ -271,6 +354,19 @@ fun PromoCombustibleApp(
                         onDeleteCard = { viewModel.deleteCard(it) },
                         onToggleFavorite = { id, type, title, sub ->
                             viewModel.toggleFavorite(id, type, title, sub)
+                        },
+                        onToggleProximityAlerts = { viewModel.setProximityAlertsEnabled(it) },
+                        onTriggerTestProximityAlert = {
+                            viewModel.triggerTestProximityAlert()
+                            Toast.makeText(context, "Notificación local enviada", Toast.LENGTH_SHORT).show()
+                        },
+                        onTriggerTestPush = { title, body ->
+                            viewModel.triggerTestPushNotification(title, body)
+                            Toast.makeText(context, "Notificación push simulada enviada", Toast.LENGTH_SHORT).show()
+                        },
+                        onSyncFirestore = {
+                            viewModel.syncDataWithFirestore()
+                            Toast.makeText(context, "Sincronizando datos con Firestore...", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }

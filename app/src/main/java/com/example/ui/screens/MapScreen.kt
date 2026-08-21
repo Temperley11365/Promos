@@ -95,6 +95,7 @@ fun MapScreen(
     favoriteIds: List<String>,
     cityZones: List<com.example.model.CityZone>,
     onSelectLocation: (GeoPoint, String, Boolean) -> Unit,
+    onRequestGpsLocation: () -> Unit = {},
     onSetRadius: (Double) -> Unit,
     onSetSearchQuery: (String) -> Unit,
     onSetCategory: (Category?) -> Unit,
@@ -291,10 +292,7 @@ fun MapScreen(
 
         // 3. Floating GPS Reset Button
         FloatingActionButton(
-            onClick = {
-                val palermo = cityZones.firstOrNull { it.id == "palermo" }?.center ?: currentLocation
-                onSelectLocation(palermo, "GPS Simulado - Palermo", true)
-            },
+            onClick = onRequestGpsLocation,
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.primary,
             shape = CircleShape,
@@ -690,8 +688,7 @@ fun MapScreen(
                 onSelectLocation(zone.center, "${zone.name}, ${zone.province}", false)
             },
             onSelectGps = {
-                val palermo = cityZones.firstOrNull { it.id == "palermo" }?.center ?: currentLocation
-                onSelectLocation(palermo, "Ubicación GPS Actual", true)
+                onRequestGpsLocation()
             },
             onDismiss = { showLocationPicker = false }
         )

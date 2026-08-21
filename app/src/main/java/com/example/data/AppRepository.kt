@@ -551,9 +551,10 @@ class AppRepository(private val db: AppDatabase) {
     fun simulatePurchaseSavings(
         amount: Double,
         category: Category,
-        userCards: List<UserCardEntity>
+        userCards: List<UserCardEntity>,
+        promoList: List<Promotion> = promotions
     ): List<CardSavingsRank> {
-        val matchingPromos = promotions.filter { it.category == category }
+        val matchingPromos = promoList.filter { it.category == category }
         val results = mutableListOf<CardSavingsRank>()
 
         for (card in userCards) {

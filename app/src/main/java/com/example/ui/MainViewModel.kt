@@ -1,11 +1,15 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppRepository
+import com.example.data.firestore.FirestoreRepository
 import com.example.data.local.AppDatabase
 import com.example.data.local.UserCardEntity
+import com.example.location.LocationHelper
 import com.example.model.Bank
 import com.example.model.CardNetwork
 import com.example.model.CardSavingsRank
@@ -16,6 +20,10 @@ import com.example.model.FuelType
 import com.example.model.GasStation
 import com.example.model.GeoPoint
 import com.example.model.Promotion
+import com.example.notification.NotificationHelper
+import com.example.notification.ProximityAlertManager
+import com.example.service.AppFirebaseMessagingService
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -92,12 +100,77 @@ data class PromoWithDistance(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: AppRepository
+    private val firestoreRepository: FirestoreRepository = FirestoreRepository()
+    private val locationHelper: LocationHelper = LocationHelper(application)
+    private val proximityAlertManager: ProximityAlertManager = ProximityAlertManager(application)
+
+    companion object {
+        private const val TAG = "MainViewModel"
+    }
+
+    private val _firestoreStations = MutableStateFlow<List<GasStation>>(emptyList())
+    private val _firestorePromotions = MutableStateFlow<List<Promotion>>(emptyList())
+
+    private val _isProximityAlertsEnabled = MutableStateFlow(true)
+    val isProximityAlertsEnabled = _isProximityAlertsEnabled.asStateFlow()
+
+    private val _fcmToken = MutableStateFlow<String?>(null)
+    val fcmToken = _fcmToken.asStateFlow()
+
+    private val _firestoreSyncStatus = MutableStateFlow("Conectado con Firestore")
+    val firestoreSyncStatus = _firestoreSyncStatus.asStateFlow()
+
+    private val _locationErrorMessage = MutableStateFlow<String?>(null)
+    val locationErrorMessage = _locationErrorMessage.asStateFlow()
 
     init {
         val db = AppDatabase.getDatabase(application)
         repository = AppRepository(db)
+        NotificationHelper.createNotificationChannels(application)
+
         viewModelScope.launch {
             repository.initDefaultCardsIfEmpty()
+        }
+
+        // Initialize and listen to Firestore
+        viewModelScope.launch {
+            try {
+                firestoreRepository.seedInitialDataIfEmpty(repository.gasStations, repository.promotions)
+            } catch (e: Exception) {
+                Log.w(TAG, "Firestore initial seed skipped: ${e.message}")
+            }
+        }
+
+        viewModelScope.launch {
+            firestoreRepository.getStationsFlow().collect { stationsList ->
+                if (stationsList.isNotEmpty()) {
+                    _firestoreStations.value = stationsList
+                    _firestoreSyncStatus.value = "Sincronizado: ${stationsList.size} estaciones en Firestore"
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            firestoreRepository.getPromotionsFlow().collect { promoList ->
+                if (promoList.isNotEmpty()) {
+                    _firestorePromotions.value = promoList
+                }
+            }
+        }
+
+        // Fetch FCM Push Registration Token
+        try {
+            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                if (task.isSuccessful) {
+                    val token = task.result
+                    _fcmToken.value = token
+                    Log.d(TAG, "FCM Token acquired: $token")
+                } else {
+                    _fcmToken.value = AppFirebaseMessagingService.lastToken
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "FirebaseMessaging token retrieval error: ${e.message}")
         }
     }
 
@@ -108,6 +181,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val cityZones = repository.cityZones
+
+    // Active gas stations list (combines Firestore live items or default repo fallback)
+    private val activeGasStations: StateFlow<List<GasStation>> = _firestoreStations
+        .combine(MutableStateFlow(repository.gasStations)) { firestoreList, defaultList ->
+            if (firestoreList.isNotEmpty()) firestoreList else defaultList
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), repository.gasStations)
+
+    // Active promotions list (combines Firestore live items or default repo fallback)
+    private val activePromotions: StateFlow<List<Promotion>> = _firestorePromotions
+        .combine(MutableStateFlow(repository.promotions)) { firestoreList, defaultList ->
+            if (firestoreList.isNotEmpty()) firestoreList else defaultList
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), repository.promotions)
 
     // UI States
     private val _selectedTab = MutableStateFlow(AppTab.MAP)
@@ -179,9 +264,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Filtered Gas Stations Flow
     val filteredStations: StateFlow<List<StationWithDistance>> = combine(
         fuelFilterState,
-        userCards
-    ) { filter, cards ->
-        val list = repository.gasStations.map { station ->
+        userCards,
+        activeGasStations
+    ) { filter, cards, stationsList ->
+        val list = stationsList.map { station ->
             val dist = repository.calculateDistanceKm(filter.loc.lat, filter.loc.lng, station.location.lat, station.location.lng)
             val (discountPct, promoDesc) = repository.getBestPromoForGasStation(station, cards)
             val basePrice = station.prices[filter.fuelType] ?: 1100.0
@@ -235,11 +321,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Filtered Promotions Flow
     val filteredPromotions: StateFlow<List<PromoWithDistance>> = combine(
         promoFilterState,
-        userCards
-    ) { filter, cards ->
+        userCards,
+        activePromotions
+    ) { filter, cards, promoList ->
         val currentDay = Calendar.getInstance().get(Calendar.DAY_OF_WEEK)
 
-        repository.promotions.map { promo ->
+        promoList.map { promo ->
             val dist = repository.calculateDistanceKm(filter.loc.lat, filter.loc.lng, promo.location.lat, promo.location.lng)
             val matchesCards = repository.doesPromoMatchUserCards(promo, cards)
             val isToday = promo.daysValid.contains(currentDay)
@@ -254,9 +341,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val matchesCat = filter.cat == null || item.promo.category == filter.cat
             val matchesMyCards = !filter.myCardsOnly || item.matchesUserCards
             val matchesDay = when (filter.dayFilter) {
-                0 -> true // All days
-                1 -> item.isTodayValid // Today
-                else -> item.promo.daysValid.contains(filter.dayFilter)
+                0 -> true // Todos los días
+                -1 -> item.isTodayValid // Hoy
+                else -> item.promo.daysValid.contains(filter.dayFilter) // 1=Domingo, 2=Lunes, 3=Martes, 4=Miércoles, 5=Jueves, 6=Viernes, 7=Sábado
             }
             val matchesQuery = filter.query.isBlank() ||
                     item.promo.title.contains(filter.query, ignoreCase = true) ||
@@ -275,13 +362,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val savingsSimulationResults: StateFlow<List<CardSavingsRank>> = combine(
         calcAmount,
         calcCategory,
-        userCards
-    ) { amtStr, cat, cards ->
+        userCards,
+        activePromotions
+    ) { amtStr, cat, cards, promoList ->
         val amount = amtStr.toDoubleOrNull() ?: 0.0
         if (amount <= 0.0 || cards.isEmpty()) {
             emptyList()
         } else {
-            repository.simulatePurchaseSavings(amount, cat, cards)
+            repository.simulatePurchaseSavings(amount, cat, cards, promoList)
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -295,6 +383,76 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _locationModeName.value = name
         _isGpsActive.value = isGps
         _selectedMapItem.value = null
+
+        // Check proximity notification when location changes
+        if (_isProximityAlertsEnabled.value) {
+            proximityAlertManager.checkProximity(point, activeGasStations.value, activePromotions.value)
+        }
+    }
+
+    fun requestDeviceGpsLocation(
+        onSuccess: (GeoPoint) -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        locationHelper.fetchCurrentLocation(
+            onSuccess = { geoPoint ->
+                setLocation(geoPoint, "Mi Posición GPS (${geoPoint.name})", isGps = true)
+                _locationErrorMessage.value = null
+                onSuccess(geoPoint)
+            },
+            onError = { error ->
+                _locationErrorMessage.value = error
+                // Fallback to Palermo Soho
+                val defaultZone = repository.cityZones[0]
+                setLocation(defaultZone.center, "${defaultZone.name} (Modo Simulado)", isGps = false)
+                onError(error)
+            }
+        )
+    }
+
+    fun startContinuousGpsUpdates() {
+        locationHelper.startRealtimeLocationUpdates { geoPoint ->
+            setLocation(geoPoint, "GPS en Vivo: ${geoPoint.name}", isGps = true)
+        }
+    }
+
+    fun stopContinuousGpsUpdates() {
+        locationHelper.stopLocationUpdates()
+    }
+
+    fun setProximityAlertsEnabled(enabled: Boolean) {
+        _isProximityAlertsEnabled.value = enabled
+        proximityAlertManager.isEnabled = enabled
+    }
+
+    fun triggerTestProximityAlert(stationName: String = "YPF Full - Palermo Soho", discountPercent: Double = 15.0) {
+        proximityAlertManager.sendTestNotification(stationName, discountPercent)
+    }
+
+    fun triggerTestPushNotification(title: String, body: String) {
+        NotificationHelper.showPushNotification(
+            context = getApplication(),
+            title = title,
+            body = body,
+            data = mapOf("action" to "FUEL_OFFER_ALERT")
+        )
+    }
+
+    fun syncDataWithFirestore() {
+        viewModelScope.launch {
+            _firestoreSyncStatus.value = "Sincronizando con Firestore..."
+            try {
+                for (station in repository.gasStations) {
+                    firestoreRepository.saveGasStation(station)
+                }
+                for (promo in repository.promotions) {
+                    firestoreRepository.savePromotion(promo)
+                }
+                _firestoreSyncStatus.value = "¡Sincronización completada con éxito en la nube!"
+            } catch (e: Exception) {
+                _firestoreSyncStatus.value = "Error al sincronizar: ${e.message}"
+            }
+        }
     }
 
     fun setRadius(km: Double) {
@@ -359,4 +517,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.toggleFavorite(itemId, itemType, title, subtitle, isFav)
         }
     }
+
+    override fun onCleared() {
+        super.onCleared()
+        locationHelper.stopLocationUpdates()
+    }
 }
+

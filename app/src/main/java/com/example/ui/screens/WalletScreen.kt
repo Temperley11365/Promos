@@ -83,15 +83,22 @@ fun WalletScreen(
     calcCategory: Category,
     savingsRankings: List<CardSavingsRank>,
     favoriteIds: List<String>,
+    isProximityAlertsEnabled: Boolean = true,
+    fcmToken: String? = null,
+    firestoreSyncStatus: String = "Conectado",
     onSetCalcAmount: (String) -> Unit,
     onSetCalcCategory: (Category) -> Unit,
     onAddCard: (Bank, CardType, CardNetwork, String, String) -> Unit,
     onDeleteCard: (Int) -> Unit,
     onToggleFavorite: (String, String, String, String) -> Unit,
+    onToggleProximityAlerts: (Boolean) -> Unit = {},
+    onTriggerTestProximityAlert: () -> Unit = {},
+    onTriggerTestPush: (String, String) -> Unit = { _, _ -> },
+    onSyncFirestore: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showAddCardDialog by remember { mutableStateOf(false) }
-    var selectedWalletTab by remember { mutableIntStateOf(0) } // 0: Mis Tarjetas & Calculadora, 1: Favoritos
+    var selectedWalletTab by remember { mutableIntStateOf(0) } // 0: Mis Tarjetas & Calculadora, 1: Favoritos, 2: Alertas & Nube
     val currencyFormat = NumberFormat.getCurrencyInstance(Locale("es", "AR"))
 
     Column(
@@ -164,6 +171,12 @@ fun WalletScreen(
                 onClick = { selectedWalletTab = 1 },
                 text = { Text("Guardados (${favoriteIds.size})", fontWeight = FontWeight.Bold) },
                 modifier = Modifier.testTag("tab_wallet_favorites")
+            )
+            Tab(
+                selected = selectedWalletTab == 2,
+                onClick = { selectedWalletTab = 2 },
+                text = { Text("Alertas & Nube", fontWeight = FontWeight.Bold) },
+                modifier = Modifier.testTag("tab_wallet_alerts_cloud")
             )
         }
 
@@ -498,7 +511,7 @@ fun WalletScreen(
                     }
                 }
             }
-        } else {
+        } else if (selectedWalletTab == 1) {
             // FAVORITES TAB
             if (favoriteIds.isEmpty()) {
                 Box(
@@ -576,6 +589,262 @@ fun WalletScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        } else {
+            // TAB 2: ALERTAS, NOTIFICACIONES Y NUBE
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.fillMaxSize().testTag("alerts_and_cloud_list")
+            ) {
+                // 1. Alertas Locales de Proximidad
+                item {
+                    ElevatedCard(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.elevatedCardElevation(3.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("proximity_alerts_card")
+                    ) {
+                        Column(modifier = Modifier.padding(18.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primaryContainer),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.LocalGasStation,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column {
+                                        Text(
+                                            text = "Alertas de Proximidad",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = if (isProximityAlertsEnabled) "Activas (< 1.2 km)" else "Desactivadas",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (isProximityAlertsEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                androidx.compose.material3.Switch(
+                                    checked = isProximityAlertsEnabled,
+                                    onCheckedChange = onToggleProximityAlerts,
+                                    modifier = Modifier.testTag("proximity_alert_switch")
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Te avisa en tiempo real cuando te encuentres cerca de una estación de servicio con una oferta o descuento bancario activo.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = onTriggerTestProximityAlert,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                ),
+                                modifier = Modifier.fillMaxWidth().testTag("test_proximity_notification_button")
+                            ) {
+                                Icon(imageVector = Icons.Default.Percent, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Probar Alerta Local de Estación Cercana", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // 2. Notificaciones Push (Firebase Cloud Messaging)
+                item {
+                    ElevatedCard(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.elevatedCardElevation(3.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("push_notifications_card")
+                    ) {
+                        Column(modifier = Modifier.padding(18.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFFEF3C7)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Star,
+                                        contentDescription = null,
+                                        tint = Color(0xFFD97706),
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Notificaciones Push (FCM)",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = if (fcmToken != null) "Dispositivo registrado en Firebase" else "Servicio FCM inicializado",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF16A34A),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "El servicio Firebase Cloud Messaging permite recibir avisos de nuevos topes de reintegro, cambios de precios de combustible y promociones flash.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            if (fcmToken != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "FCM Token: ${fcmToken.take(16)}...${fcmToken.takeLast(8)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(8.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = {
+                                    onTriggerTestPush(
+                                        "⛽ ¡Nueva Promoción Flash 20% OFF!",
+                                        "Banco Galicia + YPF: 20% de reintegro disponible hoy en todas las estaciones adheridas."
+                                    )
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().testTag("test_push_button")
+                            ) {
+                                Text("Simular Notificación Push de Combustible", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // 3. Firebase Firestore Database
+                item {
+                    ElevatedCard(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.elevatedCardElevation(3.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("firestore_card")
+                    ) {
+                        Column(modifier = Modifier.padding(18.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFDCFCE7)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = Color(0xFF16A34A),
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "Firebase Firestore",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = firestoreSyncStatus,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Las estaciones de servicio, precios y promociones están sincronizadas en tiempo real con las colecciones de Firestore.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = onSyncFirestore,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                ),
+                                modifier = Modifier.fillMaxWidth().testTag("sync_firestore_button")
+                            ) {
+                                Text("Sincronizar y Respaldar en Firestore", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // 4. Exportar APK por GitHub
+                item {
+                    ElevatedCard(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.elevatedCardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        elevation = CardDefaults.elevatedCardElevation(2.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("github_export_card")
+                    ) {
+                        Column(modifier = Modifier.padding(18.dp)) {
+                            Text(
+                                text = "📦 Exportar APK por GitHub",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "La aplicación cuenta con el workflow automatizado '.github/workflows/build-apk.yml'. Al hacer push a tu repositorio en GitHub o ejecutar el workflow, GitHub Actions compila automáticamente y genera el archivo 'app-debug.apk' descargable directamente en la pestaña de Artifacts / Releases.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
