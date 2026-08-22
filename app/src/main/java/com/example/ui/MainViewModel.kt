@@ -100,7 +100,7 @@ data class PromoWithDistance(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: AppRepository
-    private val firestoreRepository: FirestoreRepository = FirestoreRepository()
+    private val firestoreRepository: FirestoreRepository = FirestoreRepository(application)
     private val locationHelper: LocationHelper = LocationHelper(application)
     private val proximityAlertManager: ProximityAlertManager = ProximityAlertManager(application)
 
@@ -117,7 +117,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _fcmToken = MutableStateFlow<String?>(null)
     val fcmToken = _fcmToken.asStateFlow()
 
-    private val _firestoreSyncStatus = MutableStateFlow("Conectado con Firestore")
+    private val _firestoreSyncStatus = MutableStateFlow("Modo local y nube activo")
     val firestoreSyncStatus = _firestoreSyncStatus.asStateFlow()
 
     private val _locationErrorMessage = MutableStateFlow<String?>(null)
@@ -129,48 +129,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         NotificationHelper.createNotificationChannels(application)
 
         viewModelScope.launch {
-            repository.initDefaultCardsIfEmpty()
+            try {
+                repository.initDefaultCardsIfEmpty()
+            } catch (e: Throwable) {
+                Log.w(TAG, "Error initializing default cards: ${e.message}")
+            }
         }
 
         // Initialize and listen to Firestore
         viewModelScope.launch {
             try {
                 firestoreRepository.seedInitialDataIfEmpty(repository.gasStations, repository.promotions)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w(TAG, "Firestore initial seed skipped: ${e.message}")
             }
         }
 
         viewModelScope.launch {
-            firestoreRepository.getStationsFlow().collect { stationsList ->
-                if (stationsList.isNotEmpty()) {
-                    _firestoreStations.value = stationsList
-                    _firestoreSyncStatus.value = "Sincronizado: ${stationsList.size} estaciones en Firestore"
+            try {
+                firestoreRepository.getStationsFlow().collect { stationsList ->
+                    if (stationsList.isNotEmpty()) {
+                        _firestoreStations.value = stationsList
+                        _firestoreSyncStatus.value = "Sincronizado: ${stationsList.size} estaciones en Firestore"
+                    }
                 }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Firestore stations flow error: ${e.message}")
             }
         }
 
         viewModelScope.launch {
-            firestoreRepository.getPromotionsFlow().collect { promoList ->
-                if (promoList.isNotEmpty()) {
-                    _firestorePromotions.value = promoList
+            try {
+                firestoreRepository.getPromotionsFlow().collect { promoList ->
+                    if (promoList.isNotEmpty()) {
+                        _firestorePromotions.value = promoList
+                    }
                 }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Firestore promotions flow error: ${e.message}")
             }
         }
 
-        // Fetch FCM Push Registration Token
+        // Fetch FCM Push Registration Token safely
         try {
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    val token = task.result
-                    _fcmToken.value = token
-                    Log.d(TAG, "FCM Token acquired: $token")
-                } else {
-                    _fcmToken.value = AppFirebaseMessagingService.lastToken
+                try {
+                    if (task.isSuccessful) {
+                        val token = task.result
+                        _fcmToken.value = token
+                        Log.d(TAG, "FCM Token acquired: $token")
+                    } else {
+                        _fcmToken.value = AppFirebaseMessagingService.lastToken
+                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "FCM Token processing exception: ${e.message}")
                 }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "FirebaseMessaging token retrieval error: ${e.message}")
+        } catch (e: Throwable) {
+            Log.w(TAG, "FirebaseMessaging token retrieval not available: ${e.message}")
         }
     }
 
