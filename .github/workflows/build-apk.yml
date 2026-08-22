@@ -21,14 +21,27 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: 'gradle'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Accept Android SDK Licenses & Install Components
+      - name: Accept Android SDK Licenses & Tools
         run: |
           yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0" || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools" || true
+
+      - name: Prepare Secrets & Keystore
+        run: |
+          # Ensure .env file exists for Secrets Gradle Plugin
+          if [ ! -f .env ]; then
+            cp .env.example .env 2>/dev/null || touch .env
+          fi
+
+          # Decode debug.keystore if base64 file is present
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || base64 --decode debug.keystore.base64 > debug.keystore || true
+          fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -36,30 +49,9 @@ jobs:
           gradle-version: '9.3.1'
           cache-disabled: false
 
-      - name: Prepare Build Environment
+      - name: Build Debug APK
         run: |
-          # Ensure .env file exists for Secrets Gradle Plugin
-          if [ ! -f .env ]; then
-            cp .env.example .env 2>/dev/null || touch .env
-          fi
-
-          # Ensure debug.keystore is present
-          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
-            base64 -d debug.keystore.base64 > debug.keystore 2>/dev/null || base64 --decode debug.keystore.base64 > debug.keystore || true
-          fi
-
-          # Ensure gradlew executable permissions
-          if [ -f gradlew ]; then
-            chmod +x gradlew
-          fi
-
-      - name: Build Debug APK with Gradle
-        run: |
-          if [ -f gradlew ]; then
-            ./gradlew assembleDebug --no-daemon --stacktrace -Dorg.gradle.configuration-cache=false -Pksp.useKSP2=true
-          else
-            gradle assembleDebug --no-daemon --stacktrace -Dorg.gradle.configuration-cache=false -Pksp.useKSP2=true
-          fi
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
