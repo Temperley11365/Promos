@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,14 +22,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.Percent
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -36,6 +40,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -43,9 +48,12 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -71,6 +79,8 @@ import com.example.model.CardNetwork
 import com.example.model.CardSavingsRank
 import com.example.model.CardType
 import com.example.model.Category
+import com.example.model.InternetSearchState
+import com.example.model.Promotion
 import com.example.ui.components.AddCardDialog
 import java.text.NumberFormat
 import java.util.Locale
@@ -83,6 +93,8 @@ fun WalletScreen(
     calcCategory: Category,
     savingsRankings: List<CardSavingsRank>,
     favoriteIds: List<String>,
+    selectedBankIds: Set<String> = emptySet(),
+    internetSearchState: InternetSearchState = InternetSearchState(),
     isProximityAlertsEnabled: Boolean = true,
     fcmToken: String? = null,
     firestoreSyncStatus: String = "Conectado",
@@ -90,15 +102,19 @@ fun WalletScreen(
     onSetCalcCategory: (Category) -> Unit,
     onAddCard: (Bank, CardType, CardNetwork, String, String) -> Unit,
     onDeleteCard: (Int) -> Unit,
+    onToggleBankSelection: (String) -> Unit = {},
+    onSelectAllBanks: (Set<String>) -> Unit = {},
     onToggleFavorite: (String, String, String, String) -> Unit,
+    onTriggerInternetSearch: () -> Unit = {},
     onToggleProximityAlerts: (Boolean) -> Unit = {},
     onTriggerTestProximityAlert: () -> Unit = {},
     onTriggerTestPush: (String, String) -> Unit = { _, _ -> },
+    onTriggerTestMatchingCardPush: () -> Unit = {},
     onSyncFirestore: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showAddCardDialog by remember { mutableStateOf(false) }
-    var selectedWalletTab by remember { mutableIntStateOf(0) } // 0: Mis Tarjetas & Calculadora, 1: Favoritos, 2: Alertas & Nube
+    var selectedWalletTab by remember { mutableIntStateOf(0) } // 0: Tarjetas & Simulador, 1: Bancos, 2: Favoritos, 3: Alertas & Nube
     val currencyFormat = NumberFormat.getCurrencyInstance(Locale("es", "AR"))
 
     Column(
@@ -127,7 +143,7 @@ fun WalletScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "${userCards.size} tarjetas registradas para descuentos automáticos",
+                        text = "${userCards.size} tarjetas • ${if (selectedBankIds.isEmpty()) "Todos los bancos" else "${selectedBankIds.size} bancos activos"}",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -163,19 +179,25 @@ fun WalletScreen(
             Tab(
                 selected = selectedWalletTab == 0,
                 onClick = { selectedWalletTab = 0 },
-                text = { Text("Tarjetas & Simulador", fontWeight = FontWeight.Bold) },
+                text = { Text("Tarjetas", fontWeight = FontWeight.Bold) },
                 modifier = Modifier.testTag("tab_wallet_simulator")
             )
             Tab(
                 selected = selectedWalletTab == 1,
                 onClick = { selectedWalletTab = 1 },
-                text = { Text("Guardados (${favoriteIds.size})", fontWeight = FontWeight.Bold) },
-                modifier = Modifier.testTag("tab_wallet_favorites")
+                text = { Text("Bancos (${if (selectedBankIds.isEmpty()) "Todos" else selectedBankIds.size.toString()})", fontWeight = FontWeight.Bold) },
+                modifier = Modifier.testTag("tab_wallet_banks")
             )
             Tab(
                 selected = selectedWalletTab == 2,
                 onClick = { selectedWalletTab = 2 },
-                text = { Text("Alertas & Nube", fontWeight = FontWeight.Bold) },
+                text = { Text("Guardados (${favoriteIds.size})", fontWeight = FontWeight.Bold) },
+                modifier = Modifier.testTag("tab_wallet_favorites")
+            )
+            Tab(
+                selected = selectedWalletTab == 3,
+                onClick = { selectedWalletTab = 3 },
+                text = { Text("Alertas", fontWeight = FontWeight.Bold) },
                 modifier = Modifier.testTag("tab_wallet_alerts_cloud")
             )
         }
@@ -309,6 +331,164 @@ fun WalletScreen(
                                                         color = Color.White,
                                                         fontSize = 11.sp,
                                                         fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 1.5 CONTINUOUS INTERNET PROMOTIONS SEARCH MONITOR
+                item {
+                    ElevatedCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("internet_search_monitor_card"),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.elevatedCardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                        ),
+                        elevation = CardDefaults.elevatedCardElevation(2.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (internetSearchState.isSearching) MaterialTheme.colorScheme.primary else Color(0xFF00A859),
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            if (internetSearchState.isSearching) {
+                                                CircularProgressIndicator(
+                                                    color = Color.White,
+                                                    strokeWidth = 2.5.dp,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            } else {
+                                                Icon(
+                                                    imageVector = Icons.Default.Language,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(10.dp))
+
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "Búsqueda Continua en Internet",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = if (internetSearchState.isSearching) Color(0xFFFF9800) else Color(0xFF00A859).copy(alpha = 0.2f)
+                                            ) {
+                                                Text(
+                                                    text = if (internetSearchState.isSearching) "ESCANEANDO" else "EN VIVO",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Black,
+                                                    color = if (internetSearchState.isSearching) Color.White else Color(0xFF008744),
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = "Última sincronización: ${internetSearchState.lastSearchTime}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Button(
+                                    onClick = onTriggerInternetSearch,
+                                    enabled = !internetSearchState.isSearching,
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier.testTag("trigger_internet_search_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Buscar en Internet",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Buscar", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Text(
+                                text = internetSearchState.statusMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            if (internetSearchState.latestFoundPromos.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "Últimas ofertas bancarias detectadas:",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    internetSearchState.latestFoundPromos.take(3).forEach { promo ->
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = MaterialTheme.colorScheme.surface,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(8.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = promo.title,
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        fontWeight = FontWeight.Bold,
+                                                        maxLines = 1
+                                                    )
+                                                    Text(
+                                                        text = "${promo.bank.displayName} • ${promo.storeName}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = Color(0xFF00A859).copy(alpha = 0.15f)
+                                                ) {
+                                                    Text(
+                                                        text = "${promo.discountPercent.toInt()}% OFF",
+                                                        fontWeight = FontWeight.Black,
+                                                        fontSize = 11.sp,
+                                                        color = Color(0xFF008744),
                                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                                     )
                                                 }
@@ -512,7 +692,129 @@ fun WalletScreen(
                 }
             }
         } else if (selectedWalletTab == 1) {
-            // FAVORITES TAB
+            // TAB 1: BANCOS MONITOREADOS (DataStore Preferences Persistentes)
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize().testTag("monitored_banks_list")
+            ) {
+                item {
+                    ElevatedCard(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.AccountBalance,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Bancos y Billeteras Monitoreadas",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Tus selecciones se guardan automáticamente con DataStore Preferences para que persistan entre reinicios de la app.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        onSelectAllBanks(Bank.entries.filter { it != Bank.TODOS }.map { it.id }.toSet())
+                                    },
+                                    modifier = Modifier.weight(1f).testTag("select_all_banks_button")
+                                ) {
+                                    Text("Monitorear Todos", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = { onSelectAllBanks(emptySet()) },
+                                    modifier = Modifier.weight(1f).testTag("clear_all_banks_button")
+                                ) {
+                                    Text("Desmarcar Todos", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                items(Bank.entries.filter { it != Bank.TODOS }) { bank ->
+                    val isMonitored = selectedBankIds.contains(bank.id)
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isMonitored) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                        ),
+                        border = if (isMonitored) BorderStroke(1.5.dp, Color(bank.primaryColorHex).copy(alpha = 0.6f)) else null,
+                        modifier = Modifier.fillMaxWidth().testTag("bank_item_${bank.id}")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(bank.primaryColorHex)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = bank.shortName.take(2).uppercase(),
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = bank.displayName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (isMonitored) "✓ Monitoreando promociones" else "Inactivo para filtrado",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (isMonitored) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
+                            Switch(
+                                checked = isMonitored,
+                                onCheckedChange = { onToggleBankSelection(bank.id) },
+                                modifier = Modifier.testTag("switch_bank_${bank.id}"),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(bank.primaryColorHex),
+                                    checkedTrackColor = Color(bank.primaryColorHex).copy(alpha = 0.3f)
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (selectedWalletTab == 2) {
+            // TAB 2: FAVORITES TAB
             if (favoriteIds.isEmpty()) {
                 Box(
                     modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -594,7 +896,7 @@ fun WalletScreen(
                 }
             }
         } else {
-            // TAB 2: ALERTAS, NOTIFICACIONES Y NUBE
+            // TAB 3: ALERTAS, NOTIFICACIONES Y NUBE
             LazyColumn(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -744,6 +1046,26 @@ fun WalletScreen(
 
                             Spacer(modifier = Modifier.height(14.dp))
                             Button(
+                                onClick = onTriggerTestMatchingCardPush,
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ),
+                                modifier = Modifier.fillMaxWidth().testTag("test_matching_push_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CreditCard,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Probar Push Matched para mis Tarjetas", fontWeight = FontWeight.Bold)
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            OutlinedButton(
                                 onClick = {
                                     onTriggerTestPush(
                                         "⛽ ¡Nueva Promoción Flash 20% OFF!",
@@ -753,7 +1075,7 @@ fun WalletScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth().testTag("test_push_button")
                             ) {
-                                Text("Simular Notificación Push de Combustible", fontWeight = FontWeight.Bold)
+                                Text("Simular Notificación Push General", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }

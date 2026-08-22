@@ -52,3 +52,19 @@ interface FavoriteDao {
     @Query("DELETE FROM favorites WHERE itemId = :itemId")
     suspend fun deleteByItemId(itemId: String)
 }
+
+@Dao
+interface PromotionReportDao {
+    @Query("SELECT * FROM promotion_reports ORDER BY timestamp DESC")
+    fun getAllReports(): Flow<List<PromotionReportEntity>>
+
+    @Query("SELECT promoId FROM promotion_reports")
+    fun getReportedPromoIds(): Flow<List<String>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertReport(report: PromotionReportEntity): Long
+
+    @Query("DELETE FROM promotion_reports WHERE id = :id")
+    suspend fun deleteReportById(id: Int)
+}
+

@@ -40,6 +40,10 @@ class FirestoreRepository(private val context: Context? = null) {
         firestore?.collection("promotions")
     }
 
+    private val reportsCollection by lazy {
+        firestore?.collection("promotion_reports")
+    }
+
     companion object {
         private const val TAG = "FirestoreRepository"
     }
@@ -138,6 +142,31 @@ class FirestoreRepository(private val context: Context? = null) {
     suspend fun deletePromotion(promoId: String): Result<Unit> = runCatching {
         val collection = promotionsCollection ?: throw IllegalStateException("Firestore unavailable")
         collection.document(promoId).delete().await()
+    }
+
+    /**
+     * Submits a community report for an incorrect or expired promotion.
+     */
+    suspend fun submitPromotionReport(
+        promoId: String,
+        promoTitle: String,
+        storeName: String,
+        bankName: String,
+        reason: String,
+        details: String
+    ): Result<Unit> = runCatching {
+        val collection = reportsCollection ?: throw IllegalStateException("Firestore unavailable")
+        val reportData = hashMapOf(
+            "promoId" to promoId,
+            "promoTitle" to promoTitle,
+            "storeName" to storeName,
+            "bankName" to bankName,
+            "reason" to reason,
+            "details" to details,
+            "timestamp" to System.currentTimeMillis(),
+            "status" to "PENDING"
+        )
+        collection.add(reportData).await()
     }
 
     /**

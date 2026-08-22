@@ -27,3 +27,18 @@ data class FavoriteEntity(
     val subtitle: String,
     val timestamp: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "promotion_reports")
+data class PromotionReportEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Int = 0,
+    val promoId: String,
+    val promoTitle: String,
+    val storeName: String,
+    val bankName: String,
+    val reason: String,
+    val details: String = "",
+    val timestamp: Long = System.currentTimeMillis(),
+    val status: String = "PENDING"
+)
+

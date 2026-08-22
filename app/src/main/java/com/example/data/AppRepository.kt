@@ -3,6 +3,7 @@ package com.example.data
 import com.example.data.local.AppDatabase
 import com.example.data.local.FavoriteEntity
 import com.example.data.local.UserCardEntity
+import com.example.data.remote.OnlinePromoSearchService
 import com.example.model.Bank
 import com.example.model.CardNetwork
 import com.example.model.CardType
@@ -15,6 +16,8 @@ import com.example.model.GasStationBrand
 import com.example.model.GeoPoint
 import com.example.model.Promotion
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.Calendar
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -26,6 +29,97 @@ class AppRepository(private val db: AppDatabase) {
     val userCardsFlow: Flow<List<UserCardEntity>> = db.userCardDao().getAllCards()
     val favoritesFlow: Flow<List<FavoriteEntity>> = db.favoriteDao().getAllFavorites()
     val favoriteIdsFlow: Flow<List<String>> = db.favoriteDao().getAllFavoriteIds()
+    val reportedPromoIdsFlow: Flow<List<String>> = db.promotionReportDao().getReportedPromoIds()
+    val allReportsFlow: Flow<List<com.example.data.local.PromotionReportEntity>> = db.promotionReportDao().getAllReports()
+
+    val onlinePromoSearchService = OnlinePromoSearchService()
+
+    private val _dynamicOnlinePromotions = MutableStateFlow<List<Promotion>>(emptyList())
+    val dynamicOnlinePromotions = _dynamicOnlinePromotions.asStateFlow()
+
+    fun getAllMergedPromotions(): List<Promotion> {
+        val merged = mutableListOf<Promotion>()
+        merged.addAll(_dynamicOnlinePromotions.value)
+        merged.addAll(promotions)
+        return merged.distinctBy { it.id }
+    }
+
+    suspend fun searchAndAddOnlinePromosForCard(
+        bank: Bank,
+        cardType: CardType,
+        cardNetwork: CardNetwork,
+        userLocation: GeoPoint
+    ): List<Promotion> {
+        val found = onlinePromoSearchService.searchPromotionsForCard(bank, cardType, cardNetwork, userLocation)
+        if (found.isNotEmpty()) {
+            val current = _dynamicOnlinePromotions.value.toMutableList()
+            for (p in found) {
+                current.removeAll { it.id == p.id }
+                current.add(0, p)
+            }
+            _dynamicOnlinePromotions.value = current
+        }
+        return found
+    }
+
+    suspend fun searchOnlineForCards(
+        cards: List<UserCardEntity>,
+        userLocation: GeoPoint
+    ): List<Promotion> {
+        val cardsInfo = cards.map { card ->
+            val bank = Bank.fromId(card.bankId)
+            val network = CardNetwork.entries.firstOrNull { it.name.equals(card.cardNetwork, ignoreCase = true) } ?: CardNetwork.VISA
+            val type = CardType.entries.firstOrNull { it.name.equals(card.cardType, ignoreCase = true) } ?: CardType.CREDIT
+            Triple(bank, type, network)
+        }
+        val found = onlinePromoSearchService.searchPromotionsForMultipleCards(cardsInfo, userLocation)
+        if (found.isNotEmpty()) {
+            val current = _dynamicOnlinePromotions.value.toMutableList()
+            for (p in found) {
+                current.removeAll { it.id == p.id }
+                current.add(0, p)
+            }
+            _dynamicOnlinePromotions.value = current
+        }
+        return found
+    }
+
+    suspend fun searchOnlineForCardsAndBanks(
+        cards: List<UserCardEntity>,
+        selectedBankIds: Set<String>,
+        userLocation: GeoPoint
+    ): List<Promotion> {
+        val cardsInfo = mutableListOf<Triple<Bank, CardType, CardNetwork>>()
+        for (card in cards) {
+            val bank = Bank.fromId(card.bankId)
+            val network = CardNetwork.entries.firstOrNull { it.name.equals(card.cardNetwork, ignoreCase = true) } ?: CardNetwork.VISA
+            val type = CardType.entries.firstOrNull { it.name.equals(card.cardType, ignoreCase = true) } ?: CardType.CREDIT
+            cardsInfo.add(Triple(bank, type, network))
+        }
+        for (bankId in selectedBankIds) {
+            val bank = Bank.fromId(bankId)
+            if (cardsInfo.none { it.first == bank }) {
+                cardsInfo.add(Triple(bank, CardType.CREDIT, CardNetwork.VISA))
+                cardsInfo.add(Triple(bank, CardType.DEBIT, CardNetwork.VISA))
+            }
+        }
+        if (cardsInfo.isEmpty()) {
+            // Default sample query if no cards and no banks selected
+            cardsInfo.add(Triple(Bank.SANTANDER, CardType.CREDIT, CardNetwork.VISA))
+            cardsInfo.add(Triple(Bank.GALICIA, CardType.CREDIT, CardNetwork.VISA))
+            cardsInfo.add(Triple(Bank.BBVA, CardType.CREDIT, CardNetwork.VISA))
+        }
+        val found = onlinePromoSearchService.searchPromotionsForMultipleCards(cardsInfo, userLocation)
+        if (found.isNotEmpty()) {
+            val current = _dynamicOnlinePromotions.value.toMutableList()
+            for (p in found) {
+                current.removeAll { it.id == p.id }
+                current.add(0, p)
+            }
+            _dynamicOnlinePromotions.value = current
+        }
+        return found
+    }
 
     suspend fun initDefaultCardsIfEmpty() {
         if (db.userCardDao().getCardCount() == 0) {
@@ -68,6 +162,16 @@ class AppRepository(private val db: AppDatabase) {
                     cardName = "Cuenta DNI BAPRO",
                     last4 = "7749",
                     colorHex = 0xFF00A859,
+                    isDefault = false
+                ),
+                UserCardEntity(
+                    bankId = Bank.NACION.id,
+                    bankName = Bank.NACION.displayName,
+                    cardType = CardType.CREDIT.name,
+                    cardNetwork = CardNetwork.VISA.name,
+                    cardName = "Banco Nación BNA+",
+                    last4 = "6230",
+                    colorHex = 0xFF0072CE,
                     isDefault = false
                 )
             )
@@ -112,6 +216,25 @@ class AppRepository(private val db: AppDatabase) {
                 )
             )
         }
+    }
+
+    suspend fun submitPromotionReport(
+        promoId: String,
+        promoTitle: String,
+        storeName: String,
+        bankName: String,
+        reason: String,
+        details: String
+    ) {
+        val report = com.example.data.local.PromotionReportEntity(
+            promoId = promoId,
+            promoTitle = promoTitle,
+            storeName = storeName,
+            bankName = bankName,
+            reason = reason,
+            details = details
+        )
+        db.promotionReportDao().insertReport(report)
     }
 
     // City zones for quick location switching or user specification
@@ -291,27 +414,9 @@ class AppRepository(private val db: AppDatabase) {
         )
     )
 
-    // Base Promotions dataset
+    // Complete Promotions dataset across ALL Categories
     val promotions: List<Promotion> = listOf(
-        Promotion(
-            id = "promo_ypf_galicia",
-            title = "15% de Ahorro en Naftas y Tienda Full",
-            storeName = "YPF",
-            category = Category.FUEL,
-            bank = Bank.GALICIA,
-            cardNetwork = CardNetwork.VISA,
-            cardType = CardType.CREDIT,
-            discountPercent = 15.0,
-            cashbackCap = 15000.0,
-            daysValid = listOf(2, 4, 6), // Lun, Mié, Vie
-            description = "Ahorrá 15% pagando con Dinero en Cuenta o Tarjeta de Crédito Galicia Visa a través de App YPF o MODO.",
-            qrBonusPercent = 5.0,
-            installmentsNoInterest = null,
-            validUntil = "31 Dic 2026",
-            location = GeoPoint(-34.5880, -58.4220, "YPF Palermo", "Av. Scalabrini Ortiz 1950"),
-            address = "Av. Scalabrini Ortiz 1950, Palermo",
-            rating = 4.9
-        ),
+        // ----------------- 1. SUPERMERCADOS -----------------
         Promotion(
             id = "promo_coto_santander",
             title = "25% de Reintegro en Coto Digital y Sucursales",
@@ -331,21 +436,235 @@ class AppRepository(private val db: AppDatabase) {
             rating = 4.8
         ),
         Promotion(
-            id = "promo_carrefour_mercadopago",
+            id = "promo_carrefour_mp",
             title = "20% OFF en Carrefour Express y Maxi",
-            storeName = "Carrefour",
+            storeName = "Carrefour Express",
             category = Category.SUPERMARKET,
             bank = Bank.MERCADO_PAGO,
             cardNetwork = CardNetwork.MASTERCARD,
             cardType = CardType.PREPAID,
             discountPercent = 20.0,
-            cashbackCap = 10000.0,
+            cashbackCap = 12000.0,
             daysValid = listOf(1, 2, 3, 4, 5, 6, 7), // Todos los días
-            description = "20% de descuento escaneando código QR de Mercado Pago con dinero en cuenta o tarjeta prepaga Mastercard.",
+            description = "20% de descuento abonando con QR de Mercado Pago usando dinero en cuenta o tarjeta prepaga.",
             validUntil = "31 Dic 2026",
             location = GeoPoint(-34.5905, -58.4310, "Carrefour Express", "Av. Córdoba 4100"),
             address = "Av. Córdoba 4100, Palermo",
+            rating = 4.7
+        ),
+        Promotion(
+            id = "promo_dia_bapro",
+            title = "20% de Reintegro en Supermercados Día%",
+            storeName = "Supermercados Día%",
+            category = Category.SUPERMARKET,
+            bank = Bank.PROVINCIA,
+            cardNetwork = null,
+            cardType = CardType.DEBIT,
+            discountPercent = 20.0,
+            cashbackCap = 10000.0,
+            daysValid = listOf(2, 3), // Lun, Mar
+            description = "Ahorrá 20% con Cuenta DNI del Banco Provincia en todas las sucursales Día adheridas.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5862, -58.4330, "Día% Palermo", "Thames 1420"),
+            address = "Thames 1420, Palermo",
             rating = 4.6
+        ),
+        Promotion(
+            id = "promo_jumbo_nacion",
+            title = "30% OFF en Jumbo con BNA+ MODO",
+            storeName = "Jumbo Hipermercado",
+            category = Category.SUPERMARKET,
+            bank = Bank.NACION,
+            cardNetwork = CardNetwork.VISA,
+            cardType = CardType.DEBIT,
+            discountPercent = 30.0,
+            cashbackCap = 25000.0,
+            daysValid = listOf(4), // Miércoles
+            description = "30% de reintegro abonando con tarjeta de débito o crédito del Banco Nación escaneando QR BNA+.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5710, -58.4290, "Jumbo Palermo", "Av. Bullrich 345"),
+            address = "Av. Int. Bullrich 345, Palermo",
+            rating = 4.8
+        ),
+
+        // ----------------- 2. NEGOCIOS CERCANOS -----------------
+        Promotion(
+            id = "promo_kiosco_mp",
+            title = "20% Reintegro en Kioscos 24hs & Drugstores",
+            storeName = "Kiosco Open 25hs",
+            category = Category.LOCAL_STORE,
+            bank = Bank.MERCADO_PAGO,
+            cardNetwork = null,
+            cardType = CardType.PREPAID,
+            discountPercent = 20.0,
+            cashbackCap = 4000.0,
+            daysValid = listOf(1, 2, 3, 4, 5, 6, 7),
+            description = "Pagá con QR de Mercado Pago en golosinas, bebidas, cigarrillos y snacks las 24 horas del día.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5878, -58.4270, "Kiosco Open 25", "Serrano 1580"),
+            address = "Serrano 1580, Plaza Serrano",
+            rating = 4.9
+        ),
+        Promotion(
+            id = "promo_ferreteria_bapro",
+            title = "35% en Ferreterías & Bazares de Barrio",
+            storeName = "Ferretería & Bazar Palermo",
+            category = Category.LOCAL_STORE,
+            bank = Bank.PROVINCIA,
+            cardNetwork = null,
+            cardType = CardType.DEBIT,
+            discountPercent = 35.0,
+            cashbackCap = 15000.0,
+            daysValid = listOf(1, 2, 3, 4, 5, 6, 7),
+            description = "35% de reintegro pagando con Cuenta DNI en comercios de cercanía y ferreterías de barrio.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5892, -58.4250, "Ferretería Palermo", "Armenia 1820"),
+            address = "Armenia 1820, Palermo",
+            rating = 4.8
+        ),
+        Promotion(
+            id = "promo_libreria_modo",
+            title = "25% OFF + 3 Cuotas en Librerías & Papelerías",
+            storeName = "Librería Central & Útiles",
+            category = Category.LOCAL_STORE,
+            bank = Bank.MODO,
+            cardNetwork = CardNetwork.VISA,
+            cardType = CardType.CREDIT,
+            discountPercent = 25.0,
+            cashbackCap = 8000.0,
+            daysValid = listOf(2, 3, 4, 5, 6),
+            description = "Ahorrá 25% con cualquier banco asociado a MODO en libros, útiles escolares y papelería.",
+            installmentsNoInterest = 3,
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5845, -58.4295, "Librería Central", "Guatemala 4650"),
+            address = "Guatemala 4650, Palermo",
+            rating = 4.7
+        ),
+
+        // ----------------- 3. PANADERÍAS & CONFITERÍAS -----------------
+        Promotion(
+            id = "promo_panaderia_familias",
+            title = "35% OFF en Facturas, Medialunas y Pan Fresco",
+            storeName = "Panadería Artesanal Las Familias",
+            category = Category.BAKERY,
+            bank = Bank.PROVINCIA,
+            cardNetwork = null,
+            cardType = CardType.DEBIT,
+            discountPercent = 35.0,
+            cashbackCap = 8000.0,
+            daysValid = listOf(1, 2, 3, 4, 5, 6, 7),
+            description = "35% de reintegro directo con Cuenta DNI en pan recién horneado, facturas de manteca, chipá y budines.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5885, -58.4260, "Panadería Las Familias", "Gorriti 4920"),
+            address = "Gorriti 4920, Palermo",
+            rating = 4.9
+        ),
+        Promotion(
+            id = "promo_medialunas_bna",
+            title = "30% de Ahorro en Confitería & Medialunas",
+            storeName = "Medialunas Calentitas & Confitería",
+            category = Category.BAKERY,
+            bank = Bank.NACION,
+            cardNetwork = CardNetwork.VISA,
+            cardType = CardType.DEBIT,
+            discountPercent = 30.0,
+            cashbackCap = 6000.0,
+            daysValid = listOf(6, 7, 1), // Vie, Sáb, Dom
+            description = "Disfrutá tus medialunas calentitas y tortas de cumpleaños con 30% de reintegro vía BNA+.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5868, -58.4215, "Medialunas Calentitas", "Costa Rica 4710"),
+            address = "Costa Rica 4710, Palermo Soho",
+            rating = 4.9
+        ),
+        Promotion(
+            id = "promo_panaderia_galicia",
+            title = "25% en Sandwiches de Miga & Tortas",
+            storeName = "Confitería La Nueva Ideal",
+            category = Category.BAKERY,
+            bank = Bank.GALICIA,
+            cardNetwork = CardNetwork.MASTERCARD,
+            cardType = CardType.CREDIT,
+            discountPercent = 25.0,
+            cashbackCap = 10000.0,
+            daysValid = listOf(5, 6, 7),
+            description = "25% de ahorro con Galicia Visa/Mastercard en catering, masas finas y sandwiches de miga.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5838, -58.4320, "Confitería Ideal", "Honduras 5120"),
+            address = "Honduras 5120, Palermo",
+            rating = 4.8
+        ),
+
+        // ----------------- 4. MERCADOS & VERDULERÍAS -----------------
+        Promotion(
+            id = "promo_verduleria_hermanos",
+            title = "35% en Frutas, Verduras y Orgánicos",
+            storeName = "Frutería & Verdulería Los Hermanos",
+            category = Category.MARKET_GROCERY,
+            bank = Bank.PROVINCIA,
+            cardNetwork = null,
+            cardType = CardType.DEBIT,
+            discountPercent = 35.0,
+            cashbackCap = 12000.0,
+            daysValid = listOf(6, 7), // Sáb, Dom
+            description = "Ahorrá 35% los fines de semana en verduras frescas de estación, frutas y legumbres con Cuenta DNI.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5898, -58.4242, "Verdulería Los Hermanos", "Gurruchaga 1780"),
+            address = "Gurruchaga 1780, Palermo",
+            rating = 4.9
+        ),
+        Promotion(
+            id = "promo_carniceria_nacion",
+            title = "35% de Reintegro en Carnicerías y Granjas",
+            storeName = "Granja & Carnicería Don Julio",
+            category = Category.MARKET_GROCERY,
+            bank = Bank.NACION,
+            cardNetwork = CardNetwork.MASTERCARD,
+            cardType = CardType.DEBIT,
+            discountPercent = 35.0,
+            cashbackCap = 18000.0,
+            daysValid = listOf(6, 7), // Sáb, Dom
+            description = "35% de reintegro en cortes de carne seleccionados, pollo de campo y cerdo pagando con BNA+.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5855, -58.4230, "Granja Don Julio", "Borges 1930"),
+            address = "Borges 1930, Palermo",
+            rating = 4.9
+        ),
+        Promotion(
+            id = "promo_mercado_modo",
+            title = "20% OFF en Mercados Barriales y Dietéticas",
+            storeName = "Mercado Natural & Dietética Almendras",
+            category = Category.MARKET_GROCERY,
+            bank = Bank.MODO,
+            cardNetwork = null,
+            cardType = CardType.ANY,
+            discountPercent = 20.0,
+            cashbackCap = 7000.0,
+            daysValid = listOf(1, 2, 3, 4, 5, 6, 7),
+            description = "20% en frutos secos, harinas integrales, semillas y productos sin TACC pagando con QR MODO.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5872, -58.4290, "Mercado Natural", "El Salvador 4820"),
+            address = "El Salvador 4820, Palermo",
+            rating = 4.7
+        ),
+
+        // ----------------- 5. ESTACIONES DE COMBUSTIBLE -----------------
+        Promotion(
+            id = "promo_ypf_galicia",
+            title = "15% de Ahorro en Naftas y Tienda Full",
+            storeName = "YPF",
+            category = Category.FUEL,
+            bank = Bank.GALICIA,
+            cardNetwork = CardNetwork.VISA,
+            cardType = CardType.CREDIT,
+            discountPercent = 15.0,
+            cashbackCap = 15000.0,
+            daysValid = listOf(2, 4, 6), // Lun, Mié, Vie
+            description = "Ahorrá 15% pagando con Dinero en Cuenta o Tarjeta de Crédito Galicia Visa a través de App YPF o MODO.",
+            qrBonusPercent = 5.0,
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5880, -58.4220, "YPF Palermo", "Av. Scalabrini Ortiz 1950"),
+            address = "Av. Scalabrini Ortiz 1950, Palermo",
+            rating = 4.9
         ),
         Promotion(
             id = "promo_shell_bapro",
@@ -364,6 +683,25 @@ class AppRepository(private val db: AppDatabase) {
             address = "Av. Córdoba 4580, Palermo",
             rating = 4.9
         ),
+        Promotion(
+            id = "promo_axion_bbva",
+            title = "15% de Descuento en Nafta Quantium",
+            storeName = "Axion Energy",
+            category = Category.FUEL,
+            bank = Bank.BBVA,
+            cardNetwork = CardNetwork.MASTERCARD,
+            cardType = CardType.CREDIT,
+            discountPercent = 15.0,
+            cashbackCap = 12000.0,
+            daysValid = listOf(3, 7), // Mar, Sáb
+            description = "10% con ON Axion + 5% acumulable pagando con BBVA Mastercard a través de MODO.",
+            validUntil = "31 Dic 2026",
+            location = GeoPoint(-34.5830, -58.4160, "Axion Santa Fe", "Av. Santa Fe 3750"),
+            address = "Av. Santa Fe 3750, Palermo",
+            rating = 4.6
+        ),
+
+        // ----------------- 6. GASTRONOMÍA & BARES -----------------
         Promotion(
             id = "promo_starbucks_galicia",
             title = "30% OFF en Cafetería & Pastelería",
@@ -398,6 +736,8 @@ class AppRepository(private val db: AppDatabase) {
             address = "Av. Santa Fe 3900, Palermo",
             rating = 4.7
         ),
+
+        // ----------------- 7. FARMACIAS & SALUD -----------------
         Promotion(
             id = "promo_farmacity_bbva",
             title = "30% de Ahorro en Cuidado Personal y Belleza",
@@ -416,6 +756,8 @@ class AppRepository(private val db: AppDatabase) {
             address = "Jorge Luis Borges 2100, Palermo",
             rating = 4.7
         ),
+
+        // ----------------- 8. MODA & SHOPPING -----------------
         Promotion(
             id = "promo_zara_santander",
             title = "20% OFF + 6 Cuotas Sin Interés",
@@ -433,75 +775,6 @@ class AppRepository(private val db: AppDatabase) {
             location = GeoPoint(-34.5865, -58.4110, "Alto Palermo Shopping", "Av. Santa Fe 3253"),
             address = "Alto Palermo Shopping, Nivel 1",
             rating = 4.9
-        ),
-        Promotion(
-            id = "promo_fravega_macro",
-            title = "15% de Reintegro + 12 Cuotas Sin Interés",
-            storeName = "Frávega",
-            category = Category.TECH,
-            bank = Bank.MACRO,
-            cardNetwork = CardNetwork.VISA,
-            cardType = CardType.CREDIT,
-            discountPercent = 15.0,
-            cashbackCap = 35000.0,
-            daysValid = listOf(1, 2, 3, 4, 5, 6, 7),
-            description = "15% de ahorro en Smart TVs, Celulares y Electrodomésticos con tarjetas Macro Selecta.",
-            installmentsNoInterest = 12,
-            validUntil = "31 Dic 2026",
-            location = GeoPoint(-34.5845, -58.4125, "Frávega Alto Palermo", "Av. Santa Fe 3360"),
-            address = "Av. Santa Fe 3360, Palermo",
-            rating = 4.5
-        ),
-        Promotion(
-            id = "promo_cinemark_modo",
-            title = "2x1 en Entradas 2D y 3D + 20% en Popcorn",
-            storeName = "Cinemark Hoyts",
-            category = Category.ENTERTAINMENT,
-            bank = Bank.MODO,
-            cardNetwork = null,
-            cardType = CardType.ANY,
-            discountPercent = 50.0,
-            cashbackCap = 8000.0,
-            daysValid = listOf(1, 2, 3, 4, 5, 6, 7),
-            description = "2x1 en entradas todos los días pagando con cualquier banco a través de QR MODO.",
-            validUntil = "31 Dic 2026",
-            location = GeoPoint(-34.5870, -58.4100, "Cinemark Palermo", "Beruti 3399"),
-            address = "Beruti 3399, Palermo",
-            rating = 4.8
-        ),
-        Promotion(
-            id = "promo_axion_bbva",
-            title = "15% de Descuento en Nafta Quantium",
-            storeName = "Axion Energy",
-            category = Category.FUEL,
-            bank = Bank.BBVA,
-            cardNetwork = CardNetwork.MASTERCARD,
-            cardType = CardType.CREDIT,
-            discountPercent = 15.0,
-            cashbackCap = 12000.0,
-            daysValid = listOf(3, 7), // Mar, Sáb
-            description = "10% con ON Axion + 5% acumulable pagando con BBVA Mastercard a través de MODO.",
-            validUntil = "31 Dic 2026",
-            location = GeoPoint(-34.5830, -58.4160, "Axion Santa Fe", "Av. Santa Fe 3750"),
-            address = "Av. Santa Fe 3750, Palermo",
-            rating = 4.6
-        ),
-        Promotion(
-            id = "promo_jumbo_nacion",
-            title = "30% OFF en Jumbo con BNA+ MODO",
-            storeName = "Jumbo Hipermercado",
-            category = Category.SUPERMARKET,
-            bank = Bank.NACION,
-            cardNetwork = CardNetwork.VISA,
-            cardType = CardType.DEBIT,
-            discountPercent = 30.0,
-            cashbackCap = 25000.0,
-            daysValid = listOf(4), // Miércoles
-            description = "30% de reintegro abonando con tarjeta de débito o crédito del Banco Nación escaneando QR BNA+.",
-            validUntil = "31 Dic 2026",
-            location = GeoPoint(-34.5710, -58.4290, "Jumbo Palermo", "Av. Bullrich 345"),
-            address = "Av. Int. Bullrich 345, Palermo",
-            rating = 4.8
         )
     )
 

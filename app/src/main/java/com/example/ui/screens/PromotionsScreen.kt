@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
@@ -31,14 +32,17 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Percent
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.FormatListBulleted
 import androidx.compose.material.icons.outlined.Map
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
@@ -55,6 +59,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,14 +73,19 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.Bank
 import com.example.model.Category
 import com.example.model.FuelType
 import com.example.model.GeoPoint
+import com.example.model.InternetSearchState
 import com.example.model.Promotion
 import com.example.ui.MapItem
 import com.example.ui.PromoWithDistance
+import com.example.ui.components.AnimatedBusinessIcon
+import com.example.ui.components.InteractiveCategoryChip
 import com.example.ui.components.InteractiveMapCanvas
 import com.example.ui.components.PromoDetailSheet
+import com.example.ui.components.ReportPromotionDialog
 import java.text.NumberFormat
 import java.util.Calendar
 import java.util.Locale
@@ -94,18 +104,28 @@ fun PromotionsScreen(
     searchQuery: String,
     selectedCategory: Category?,
     filterMyCardsOnly: Boolean,
+    showAllPromotionsUnfiltered: Boolean = false,
+    selectedBankFilter: String = "ALL",
     selectedDayFilter: Int,
     favoriteIds: List<String>,
+    reportedPromoIds: List<String> = emptyList(),
     locationModeName: String,
+    internetSearchState: InternetSearchState = InternetSearchState(),
     onSetSearchQuery: (String) -> Unit,
     onSetCategory: (Category?) -> Unit,
     onSetFilterMyCards: (Boolean) -> Unit,
+    onSetShowAllPromotionsUnfiltered: (Boolean) -> Unit = {},
+    onSetSelectedBankFilter: (String) -> Unit = {},
+    onClearAllFilters: () -> Unit = {},
     onSetDayFilter: (Int) -> Unit,
     onToggleFavorite: (String, String, String, String) -> Unit,
+    onSubmitReportPromo: (Promotion, String, String) -> Unit = { _, _, _ -> },
+    onTriggerInternetSearch: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var viewMode by remember { mutableStateOf(PromoDisplayMode.LIST) }
     var selectedPromoForDetail by remember { mutableStateOf<Promotion?>(null) }
+    var promoToReport by remember { mutableStateOf<Promotion?>(null) }
     var selectedMapItem by remember { mutableStateOf<MapItem?>(null) }
     val currencyFormat = NumberFormat.getCurrencyInstance(Locale("es", "AR"))
 
@@ -158,7 +178,7 @@ fun PromotionsScreen(
                 .background(MaterialTheme.colorScheme.surface)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            // Top Row: Title + "Mis Tarjetas" Filter Switch
+            // Top Row: Title + Filter Modes (Sin Filtros / Solo Mis Tarjetas)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -173,38 +193,73 @@ fun PromotionsScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Cerca de $locationModeName",
+                        text = if (showAllPromotionsUnfiltered) "🌟 Modo catálogo completo (Sin Filtros)" else "Cerca de $locationModeName",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (showAllPromotionsUnfiltered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                // Switch for "Solo mis tarjetas"
+                // Filter Actions Row
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = "Mis Tarjetas",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 0.3.sp,
-                        color = if (filterMyCardsOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(end = 4.dp)
-                    )
-                    Switch(
-                        checked = filterMyCardsOnly,
-                        onCheckedChange = onSetFilterMyCards,
-                        modifier = Modifier.testTag("promos_filter_my_cards_switch"),
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.primary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                    // "Ver Todas" / "Sin Filtros" chip button
+                    Surface(
+                        onClick = {
+                            onSetShowAllPromotionsUnfiltered(!showAllPromotionsUnfiltered)
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (showAllPromotionsUnfiltered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.testTag("promos_toggle_unfiltered_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (showAllPromotionsUnfiltered) Icons.Filled.Star else Icons.Outlined.Star,
+                                contentDescription = null,
+                                tint = if (showAllPromotionsUnfiltered) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Sin Filtros",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                color = if (showAllPromotionsUnfiltered) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // Switch for "Solo mis tarjetas"
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "Mis Tarjetas",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 0.3.sp,
+                            color = if (filterMyCardsOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(end = 4.dp)
                         )
-                    )
+                        Switch(
+                            checked = filterMyCardsOnly,
+                            onCheckedChange = onSetFilterMyCards,
+                            modifier = Modifier.testTag("promos_filter_my_cards_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        )
+                    }
                 }
             }
 
@@ -321,33 +376,103 @@ fun PromotionsScreen(
             }
         }
 
-        // Category Filter Chips
+        // Category Filter Chips with Animated & Interactive Business Badges
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().testTag("promo_category_bar")
         ) {
             item {
                 val isAllSelected = selectedCategory == null
-                FilterChip(
-                    selected = isAllSelected,
-                    onClick = { onSetCategory(null) },
-                    label = { Text("Todas", fontWeight = FontWeight.Bold) },
-                    modifier = Modifier.testTag("promo_cat_all")
-                )
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (isAllSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                    shadowElevation = if (isAllSelected) 4.dp else 1.dp,
+                    modifier = Modifier
+                        .clickable { onSetCategory(null) }
+                        .testTag("promo_cat_all")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "✨ Todas las Categorías",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isAllSelected) FontWeight.Black else FontWeight.Bold,
+                            color = if (isAllSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
             }
             items(Category.entries) { cat ->
                 val isSelected = selectedCategory == cat
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { onSetCategory(if (isSelected) null else cat) },
-                    label = { Text(cat.displayName, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(cat.colorHex),
-                        selectedLabelColor = Color.White
-                    ),
-                    modifier = Modifier.testTag("promo_cat_${cat.id}")
+                InteractiveCategoryChip(
+                    category = cat,
+                    isSelected = isSelected,
+                    onSelect = { onSetCategory(if (isSelected) null else cat) }
                 )
+            }
+        }
+
+        // Bank Filter Chips Row (Santander, Galicia, BBVA, Macro, Nación, Cuenta DNI, etc.)
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.fillMaxWidth().testTag("promo_bank_filter_bar")
+        ) {
+            item {
+                val isAllBanks = selectedBankFilter == "ALL"
+                Surface(
+                    onClick = { onSetSelectedBankFilter("ALL") },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isAllBanks) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+                    border = if (isAllBanks) BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary) else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.testTag("bank_filter_all")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "🏦 Todos los Bancos",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (isAllBanks) FontWeight.Black else FontWeight.Medium,
+                            color = if (isAllBanks) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            items(Bank.entries.filter { it != Bank.TODOS }) { bank ->
+                val isSelected = selectedBankFilter.equals(bank.id, ignoreCase = true)
+                Surface(
+                    onClick = {
+                        onSetSelectedBankFilter(if (isSelected) "ALL" else bank.id)
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isSelected) Color(bank.primaryColorHex).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface,
+                    border = if (isSelected) BorderStroke(1.5.dp, Color(bank.primaryColorHex)) else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.testTag("bank_filter_${bank.id}")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(Color(bank.primaryColorHex))
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = bank.shortName,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (isSelected) FontWeight.Black else FontWeight.Medium,
+                            color = if (isSelected) Color(bank.primaryColorHex) else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
 
@@ -391,27 +516,107 @@ fun PromotionsScreen(
                 }
             }
 
-            // Small Day Context Indicator Banner
-            Row(
+            // Unfiltered Banner & Small Day Context / Internet Live Search Indicator Banner
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                Text(
-                    text = "Promos para: $currentDayLabel".uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 0.5.sp,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "${promotions.size} disponibles",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (showAllPromotionsUnfiltered) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .testTag("unfiltered_mode_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(text = "🌟", fontSize = 16.sp, modifier = Modifier.padding(end = 8.dp))
+                                Column {
+                                    Text(
+                                        text = "Viendo TODAS las promociones sin filtros",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Black,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Text(
+                                        text = "Sin restricción de tarjeta ni banco",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                            TextButton(
+                                onClick = onClearAllFilters,
+                                modifier = Modifier.testTag("restore_filters_button")
+                            ) {
+                                Text(
+                                    text = "Restablecer",
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (showAllPromotionsUnfiltered) "CATÁLOGO COMPLETO SIN FILTROS" else "Promos para: $currentDayLabel".uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 0.5.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "${promotions.size} disponibles",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (internetSearchState.isSearching || internetSearchState.totalOnlinePromosFound > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (internetSearchState.isSearching) Color(0xFFFEF3C7) else Color(0xFFD1FAE5),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (internetSearchState.isSearching) "🔍" else "🌐",
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(end = 6.dp)
+                            )
+                            Text(
+                                text = internetSearchState.statusMessage,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (internetSearchState.isSearching) Color(0xFF92400E) else Color(0xFF065F46),
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -506,7 +711,6 @@ fun PromotionsScreen(
                                             }
 
                                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                                // Quick locate on map button
                                                 IconButton(
                                                     onClick = {
                                                         selectedMapItem = MapItem.PromoItem(
@@ -522,6 +726,21 @@ fun PromotionsScreen(
                                                         imageVector = Icons.Default.LocationOn,
                                                         contentDescription = "Ver en mapa",
                                                         tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+
+                                                Spacer(modifier = Modifier.width(4.dp))
+
+                                                IconButton(
+                                                    onClick = {
+                                                        promoToReport = item.promo
+                                                    },
+                                                    modifier = Modifier.size(32.dp).testTag("report_promo_${item.promo.id}")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Flag,
+                                                        contentDescription = "Reportar promo",
+                                                        tint = if (reportedPromoIds.contains(item.promo.id)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                                     )
                                                 }
 
@@ -549,37 +768,52 @@ fun PromotionsScreen(
 
                                         Spacer(modifier = Modifier.height(10.dp))
 
-                                        // Main Content Row
+                                        // Main Content Row with Animated Business Icon
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.SpaceBetween
                                         ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = item.promo.storeName.uppercase(),
-                                                    style = MaterialTheme.typography.headlineSmall,
-                                                    fontWeight = FontWeight.Black,
-                                                    letterSpacing = (-0.5).sp,
-                                                    color = MaterialTheme.colorScheme.onSurface
+                                            Row(
+                                                modifier = Modifier.weight(1f),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                AnimatedBusinessIcon(
+                                                    category = item.promo.category,
+                                                    size = 52.dp,
+                                                    showBadge = true,
+                                                    isHighlighted = item.matchesUserCards,
+                                                    onClick = { selectedPromoForDetail = item.promo }
                                                 )
-                                                Text(
-                                                    text = item.promo.title,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                                Text(
-                                                    text = item.promo.bank.displayName.uppercase(),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    letterSpacing = 0.5.sp,
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.padding(top = 2.dp)
-                                                )
+
+                                                Spacer(modifier = Modifier.width(12.dp))
+
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = item.promo.storeName.uppercase(),
+                                                        style = MaterialTheme.typography.headlineSmall,
+                                                        fontWeight = FontWeight.Black,
+                                                        letterSpacing = (-0.5).sp,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    Text(
+                                                        text = item.promo.title,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Text(
+                                                        text = item.promo.bank.displayName.uppercase(),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        letterSpacing = 0.5.sp,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.padding(top = 2.dp)
+                                                    )
+                                                }
                                             }
 
-                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
 
                                             // Discount text badge
                                             Column(horizontalAlignment = Alignment.End) {
@@ -636,6 +870,27 @@ fun PromotionsScreen(
                                                 }
                                             }
 
+                                             if (item.promo.isOnlineDiscovered) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = Color(0xFF2563EB).copy(alpha = 0.15f),
+                                                    border = BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.35f))
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Text(
+                                                            text = "⚡ VIGENTE ONLINE",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Black,
+                                                            letterSpacing = 0.4.sp,
+                                                            color = Color(0xFF1D4ED8)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
                                             if (item.matchesUserCards) {
                                                 Surface(
                                                     shape = RoundedCornerShape(8.dp),
@@ -657,6 +912,34 @@ fun PromotionsScreen(
                                                             style = MaterialTheme.typography.labelSmall,
                                                             fontWeight = FontWeight.Bold,
                                                             color = MaterialTheme.colorScheme.primary
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                             if (reportedPromoIds.contains(item.promo.id)) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
+                                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Flag,
+                                                            contentDescription = null,
+                                                            tint = MaterialTheme.colorScheme.error,
+                                                            modifier = Modifier.size(12.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(
+                                                            text = "EN REVISIÓN (REPORTADA)",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Black,
+                                                            letterSpacing = 0.3.sp,
+                                                            color = MaterialTheme.colorScheme.error
                                                         )
                                                     }
                                                 }
@@ -945,7 +1228,24 @@ fun PromotionsScreen(
                     "${promo.storeName} • ${promo.bank.displayName}"
                 )
             },
+            onReportPromo = {
+                val target = promo
+                selectedPromoForDetail = null
+                promoToReport = target
+            },
             onDismiss = { selectedPromoForDetail = null }
+        )
+    }
+
+    // Report Promotion Dialog
+    if (promoToReport != null) {
+        val target = promoToReport!!
+        ReportPromotionDialog(
+            promo = target,
+            onDismiss = { promoToReport = null },
+            onSubmitReport = { reason, details ->
+                onSubmitReportPromo(target, reason, details)
+            }
         )
     }
 }

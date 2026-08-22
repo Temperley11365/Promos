@@ -20,13 +20,13 @@ enum class Bank(
     BBVA("bbva", "Banco BBVA", "BBVA", 0xFF004481),
     MACRO("macro", "Banco Macro", "Macro", 0xFF002B49),
     NACION("nacion", "Banco Nación", "BNA", 0xFF0072CE),
-    PROVINCIA("provincia", "Banco Provincia (Cuenta DNI)", "BAPRO", 0xFF00A859),
+    PROVINCIA("provincia", "Banco Provincia (Cuenta DNI)", "Cuenta DNI", 0xFF00A859),
     CIUDAD("ciudad", "Banco Ciudad", "Ciudad", 0xFFE30613),
     ICBC("icbc", "Banco ICBC", "ICBC", 0xFFC8102E),
     HSBC("hsbc", "Banco HSBC", "HSBC", 0xFFDB0011),
     BRUBANK("brubank", "Brubank", "Brubank", 0xFF5D1049),
     UALA("uala", "Ualá", "Ualá", 0xFFFF3366),
-    MERCADO_PAGO("mercadopago", "Mercado Pago", "MP", 0xFF009EE3),
+    MERCADO_PAGO("mercadopago", "Mercado Pago", "Mercado Pago", 0xFF009EE3),
     MODO("modo", "MODO Billetera", "MODO", 0xFF00C853),
     TODOS("todos", "Cualquier Tarjeta / Efectivo", "General", 0xFF475569);
 
@@ -53,20 +53,78 @@ enum class CardType(val displayName: String) {
 enum class Category(
     val id: String,
     val displayName: String,
+    val emoji: String,
     val iconName: String,
-    val colorHex: Long
+    val colorHex: Long,
+    val description: String
 ) {
-    FUEL("fuel", "Combustibles", "local_gas_station", 0xFF0284C7),
-    SUPERMARKET("supermarket", "Supermercados", "shopping_cart", 0xFF10B981),
-    GASTRONOMY("gastronomy", "Gastronomía & Bares", "restaurant", 0xFFF59E0B),
-    SHOPPING("shopping", "Moda & Shopping", "shopping_bag", 0xFFEC4899),
-    PHARMACY("pharmacy", "Farmacias & Salud", "local_pharmacy", 0xFF8B5CF6),
-    TECH("tech", "Tecnología & Hogar", "devices", 0xFF3B82F6),
-    ENTERTAINMENT("entertainment", "Cine & Salidas", "movie", 0xFFEF4444),
-    SERVICES("services", "Servicios & Auto", "build", 0xFF64748B);
+    SUPERMARKET(
+        id = "supermarket",
+        displayName = "Supermercados",
+        emoji = "🛒",
+        iconName = "shopping_cart",
+        colorHex = 0xFF10B981,
+        description = "Carrefour, Coto, Día, Jumbo, ChangoMás"
+    ),
+    LOCAL_STORE(
+        id = "local_store",
+        displayName = "Negocios Cercanos",
+        emoji = "🏪",
+        iconName = "storefront",
+        colorHex = 0xFF8B5CF6,
+        description = "Kioscos 24hs, ferreterías, librerías y bazares"
+    ),
+    BAKERY(
+        id = "bakery",
+        displayName = "Panaderías",
+        emoji = "🥐",
+        iconName = "bakery_dining",
+        colorHex = 0xFFD97706,
+        description = "Panaderías artesanales, facturas, medialunas y confiterías"
+    ),
+    MARKET_GROCERY(
+        id = "market_grocery",
+        displayName = "Mercados & Verdulerías",
+        emoji = "🍎",
+        iconName = "store",
+        colorHex = 0xFF059669,
+        description = "Fruterías, verdulerías, carnicerías y ferias barriales"
+    ),
+    FUEL(
+        id = "fuel",
+        displayName = "Estaciones de Combustible",
+        emoji = "⛽",
+        iconName = "local_gas_station",
+        colorHex = 0xFF0284C7,
+        description = "YPF, Shell, Axion, Puma, Gulf"
+    ),
+    GASTRONOMY(
+        id = "gastronomy",
+        displayName = "Gastronomía & Bares",
+        emoji = "🍔",
+        iconName = "restaurant",
+        colorHex = 0xFFF59E0B,
+        description = "Restaurantes, cafeterías, heladerías y pizzerías"
+    ),
+    PHARMACY(
+        id = "pharmacy",
+        displayName = "Farmacias & Salud",
+        emoji = "💊",
+        iconName = "local_pharmacy",
+        colorHex = 0xFF06B6D4,
+        description = "Farmacity, Dr. Ahorro, perfumerías y ópticas"
+    ),
+    SHOPPING(
+        id = "shopping",
+        displayName = "Moda & Shopping",
+        emoji = "🛍️",
+        iconName = "shopping_bag",
+        colorHex = 0xFFEC4899,
+        description = "Indumentaria, calzado, centros comerciales y outlets"
+    );
 
     companion object {
-        fun fromId(id: String): Category = entries.firstOrNull { it.id == id } ?: FUEL
+        fun fromId(id: String): Category = entries.firstOrNull { it.id == id } ?: SUPERMARKET
     }
 }
 
@@ -123,7 +181,10 @@ data class Promotion(
     val validUntil: String,
     val location: GeoPoint,
     val address: String,
-    val rating: Double = 4.7
+    val rating: Double = 4.8,
+    val isOnlineDiscovered: Boolean = false,
+    val sourceUrl: String? = null,
+    val verifiedOnlineDate: String? = null
 ) {
     fun isValidToday(): Boolean {
         val calendar = Calendar.getInstance()

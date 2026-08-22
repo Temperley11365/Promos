@@ -6,13 +6,14 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [UserCardEntity::class, FavoriteEntity::class],
-    version = 1,
+    entities = [UserCardEntity::class, FavoriteEntity::class, PromotionReportEntity::class],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun userCardDao(): UserCardDao
     abstract fun favoriteDao(): FavoriteDao
+    abstract fun promotionReportDao(): PromotionReportDao
 
     companion object {
         @Volatile

@@ -17,13 +17,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Percent
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -57,6 +59,7 @@ fun PromoDetailSheet(
     matchesUserCards: Boolean,
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
+    onReportPromo: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState()
@@ -81,28 +84,52 @@ fun PromoDetailSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = Color(promo.category.colorHex).copy(alpha = 0.15f)
-                ) {
-                    Text(
-                        text = promo.category.displayName,
-                        color = Color(promo.category.colorHex),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AnimatedBusinessIcon(
+                        category = promo.category,
+                        size = 42.dp,
+                        showBadge = true,
+                        isHighlighted = true
                     )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(promo.category.colorHex).copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = promo.category.displayName,
+                            color = Color(promo.category.colorHex),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
                 }
 
-                IconButton(
-                    onClick = onToggleFavorite,
-                    modifier = Modifier.testTag("promo_favorite_button")
-                ) {
-                    Icon(
-                        imageVector = if (isFavorite) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
-                        contentDescription = "Guardar favorito",
-                        tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (onReportPromo != null) {
+                        IconButton(
+                            onClick = onReportPromo,
+                            modifier = Modifier.testTag("detail_report_promo_button")
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.filled.Flag,
+                                contentDescription = "Reportar promoción",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = onToggleFavorite,
+                        modifier = Modifier.testTag("promo_favorite_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Default.Bookmark else Icons.Outlined.BookmarkBorder,
+                            contentDescription = "Guardar favorito",
+                            tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
@@ -317,7 +344,28 @@ fun PromoDetailSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(20.dp))
+            if (onReportPromo != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                androidx.compose.material3.TextButton(
+                    onClick = onReportPromo,
+                    modifier = Modifier.testTag("report_issue_text_button")
+                ) {
+                    Icon(
+                        imageVector = androidx.compose.material.icons.filled.Flag,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "¿Información incorrecta o vencida? Reportar",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             Button(
                 onClick = onDismiss,

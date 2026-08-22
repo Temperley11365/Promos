@@ -78,6 +78,9 @@ fun PromoCombustibleApp(
     val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
     val filterMyCardsOnly by viewModel.filterMyCardsOnly.collectAsStateWithLifecycle()
     val selectedDayFilter by viewModel.selectedDayFilter.collectAsStateWithLifecycle()
+    val showAllPromotionsUnfiltered by viewModel.showAllPromotionsUnfiltered.collectAsStateWithLifecycle()
+    val selectedBankFilter by viewModel.selectedBankFilter.collectAsStateWithLifecycle()
+    val selectedBankIds by viewModel.selectedBankIds.collectAsStateWithLifecycle()
     val selectedFuelType by viewModel.selectedFuelType.collectAsStateWithLifecycle()
     val fuelSortOption by viewModel.fuelSortOption.collectAsStateWithLifecycle()
     val fuelTankLiters by viewModel.fuelTankLiters.collectAsStateWithLifecycle()
@@ -85,6 +88,7 @@ fun PromoCombustibleApp(
 
     val userCards by viewModel.userCards.collectAsStateWithLifecycle()
     val favoriteIds by viewModel.favoriteIds.collectAsStateWithLifecycle()
+    val reportedPromoIds by viewModel.reportedPromoIds.collectAsStateWithLifecycle()
     val stations by viewModel.filteredStations.collectAsStateWithLifecycle()
     val promotions by viewModel.filteredPromotions.collectAsStateWithLifecycle()
     val savingsRankings by viewModel.savingsSimulationResults.collectAsStateWithLifecycle()
@@ -93,6 +97,9 @@ fun PromoCombustibleApp(
     val isProximityAlertsEnabled by viewModel.isProximityAlertsEnabled.collectAsStateWithLifecycle()
     val fcmToken by viewModel.fcmToken.collectAsStateWithLifecycle()
     val firestoreSyncStatus by viewModel.firestoreSyncStatus.collectAsStateWithLifecycle()
+    val internetSearchState by viewModel.internetSearchState.collectAsStateWithLifecycle()
+    val isLocationLoading by viewModel.isLocationLoading.collectAsStateWithLifecycle()
+    val isGpsPermissionGranted by viewModel.isGpsPermissionGranted.collectAsStateWithLifecycle()
 
     // Permissions Launchers
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -100,18 +107,21 @@ fun PromoCombustibleApp(
     ) { permissions ->
         val fineLocationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
         val coarseLocationGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        val isGranted = fineLocationGranted || coarseLocationGranted
 
-        if (fineLocationGranted || coarseLocationGranted) {
+        viewModel.updatePermissionStatus(isGranted)
+
+        if (isGranted) {
             viewModel.requestDeviceGpsLocation(
-                onSuccess = {
-                    Toast.makeText(context, "Ubicación GPS obtenida con éxito", Toast.LENGTH_SHORT).show()
+                onSuccess = { geo ->
+                    Toast.makeText(context, "Ubicación GPS obtenida: ${geo.name}", Toast.LENGTH_SHORT).show()
                 },
-                onError = {
-                    Toast.makeText(context, "No se pudo obtener el GPS: $it", Toast.LENGTH_SHORT).show()
+                onError = { error ->
+                    Toast.makeText(context, "Aviso GPS: $error", Toast.LENGTH_SHORT).show()
                 }
             )
         } else {
-            Toast.makeText(context, "Permiso de ubicación denegado. Usando zona seleccionada.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Modo zona predeterminada activo (GPS no autorizado)", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -119,12 +129,29 @@ fun PromoCombustibleApp(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            Toast.makeText(context, "Notificaciones habilitadas", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Alertas de proximidad habilitadas", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // Check notification permission on Android 13+
+    // Check permissions and initialize GPS automatically on app startup safely
     LaunchedEffect(Unit) {
+        val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasLocation = hasFine || hasCoarse
+
+        viewModel.updatePermissionStatus(hasLocation)
+
+        if (hasLocation) {
+            viewModel.requestDeviceGpsLocation()
+        } else {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -142,7 +169,7 @@ fun PromoCombustibleApp(
                     Toast.makeText(context, "Ubicación GPS actualizada", Toast.LENGTH_SHORT).show()
                 },
                 onError = { error ->
-                    Toast.makeText(context, error, Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "GPS: $error", Toast.LENGTH_SHORT).show()
                 }
             )
         } else {
@@ -165,30 +192,7 @@ fun PromoCombustibleApp(
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .testTag("main_navigation_bar")
             ) {
-                // Tab 1: Mapa
-                NavigationBarItem(
-                    selected = selectedTab == AppTab.MAP,
-                    onClick = { viewModel.setTab(AppTab.MAP) },
-                    icon = {
-                        Icon(
-                            imageVector = if (selectedTab == AppTab.MAP) Icons.Filled.Map else Icons.Outlined.Map,
-                            contentDescription = "Mapa"
-                        )
-                    },
-                    label = {
-                        Text(
-                            text = AppTab.MAP.title,
-                            fontWeight = if (selectedTab == AppTab.MAP) FontWeight.Bold else FontWeight.Normal
-                        )
-                    },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                    ),
-                    modifier = Modifier.testTag("nav_tab_map")
-                )
-
-                // Tab 2: Ofertas & Promociones
+                // Tab 1: Ofertas & Promociones (Principal)
                 NavigationBarItem(
                     selected = selectedTab == AppTab.PROMOTIONS,
                     onClick = { viewModel.setTab(AppTab.PROMOTIONS) },
@@ -209,6 +213,29 @@ fun PromoCombustibleApp(
                         indicatorColor = MaterialTheme.colorScheme.primaryContainer
                     ),
                     modifier = Modifier.testTag("nav_tab_promotions")
+                )
+
+                // Tab 2: Mapa
+                NavigationBarItem(
+                    selected = selectedTab == AppTab.MAP,
+                    onClick = { viewModel.setTab(AppTab.MAP) },
+                    icon = {
+                        Icon(
+                            imageVector = if (selectedTab == AppTab.MAP) Icons.Filled.Map else Icons.Outlined.Map,
+                            contentDescription = "Mapa"
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = AppTab.MAP.title,
+                            fontWeight = if (selectedTab == AppTab.MAP) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                    ),
+                    modifier = Modifier.testTag("nav_tab_map")
                 )
 
                 // Tab 3: Combustibles
@@ -306,16 +333,28 @@ fun PromoCombustibleApp(
                         searchQuery = searchQuery,
                         selectedCategory = selectedCategory,
                         filterMyCardsOnly = filterMyCardsOnly,
+                        showAllPromotionsUnfiltered = showAllPromotionsUnfiltered,
+                        selectedBankFilter = selectedBankFilter,
                         selectedDayFilter = selectedDayFilter,
                         favoriteIds = favoriteIds,
+                        reportedPromoIds = reportedPromoIds,
                         locationModeName = locationModeName,
+                        internetSearchState = internetSearchState,
                         onSetSearchQuery = { viewModel.setSearchQuery(it) },
                         onSetCategory = { viewModel.setCategory(it) },
                         onSetFilterMyCards = { viewModel.setFilterMyCardsOnly(it) },
+                        onSetShowAllPromotionsUnfiltered = { viewModel.setShowAllPromotionsUnfiltered(it) },
+                        onSetSelectedBankFilter = { viewModel.setSelectedBankFilter(it) },
+                        onClearAllFilters = { viewModel.clearAllFilters() },
                         onSetDayFilter = { viewModel.setDayFilter(it) },
                         onToggleFavorite = { id, type, title, sub ->
                             viewModel.toggleFavorite(id, type, title, sub)
-                        }
+                        },
+                        onSubmitReportPromo = { promo, reason, details ->
+                            viewModel.submitPromotionReport(promo, reason, details)
+                            Toast.makeText(context, "Reporte enviado para ${promo.storeName}. ¡Gracias!", Toast.LENGTH_SHORT).show()
+                        },
+                        onTriggerInternetSearch = { viewModel.triggerManualInternetSearch() }
                     )
                 }
 
@@ -343,6 +382,8 @@ fun PromoCombustibleApp(
                         calcCategory = calcCategory,
                         savingsRankings = savingsRankings,
                         favoriteIds = favoriteIds,
+                        selectedBankIds = selectedBankIds,
+                        internetSearchState = internetSearchState,
                         isProximityAlertsEnabled = isProximityAlertsEnabled,
                         fcmToken = fcmToken,
                         firestoreSyncStatus = firestoreSyncStatus,
@@ -352,9 +393,12 @@ fun PromoCombustibleApp(
                             viewModel.addCard(bank, type, net, name, last4)
                         },
                         onDeleteCard = { viewModel.deleteCard(it) },
+                        onToggleBankSelection = { viewModel.toggleBankSelection(it) },
+                        onSelectAllBanks = { viewModel.setSelectedBankIds(it) },
                         onToggleFavorite = { id, type, title, sub ->
                             viewModel.toggleFavorite(id, type, title, sub)
                         },
+                        onTriggerInternetSearch = { viewModel.triggerManualInternetSearch() },
                         onToggleProximityAlerts = { viewModel.setProximityAlertsEnabled(it) },
                         onTriggerTestProximityAlert = {
                             viewModel.triggerTestProximityAlert()
@@ -363,6 +407,10 @@ fun PromoCombustibleApp(
                         onTriggerTestPush = { title, body ->
                             viewModel.triggerTestPushNotification(title, body)
                             Toast.makeText(context, "Notificación push simulada enviada", Toast.LENGTH_SHORT).show()
+                        },
+                        onTriggerTestMatchingCardPush = {
+                            viewModel.testMatchingPushNotification()
+                            Toast.makeText(context, "Notificación push enviada para tus tarjetas", Toast.LENGTH_SHORT).show()
                         },
                         onSyncFirestore = {
                             viewModel.syncDataWithFirestore()
