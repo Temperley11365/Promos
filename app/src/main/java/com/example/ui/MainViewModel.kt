@@ -209,494 +209,182 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _filterMyCardsOnly = MutableStateFlow(false)
     val filterMyCardsOnly = _filterMyCardsOnly.asStateFlow()
 
+    private val _selectedDayFilter = MutableStateFlow<Int?>(null)
+    val selectedDayFilter = _selectedDayFilter.asStateFlow()
+
     private val _showAllPromotionsUnfiltered = MutableStateFlow(false)
     val showAllPromotionsUnfiltered = _showAllPromotionsUnfiltered.asStateFlow()
 
-    private val _selectedBankFilter = MutableStateFlow("ALL")
+    private val _selectedBankFilter = MutableStateFlow<Bank?>(null)
     val selectedBankFilter = _selectedBankFilter.asStateFlow()
 
     private val _selectedBankIds = MutableStateFlow<Set<String>>(emptySet())
     val selectedBankIds = _selectedBankIds.asStateFlow()
 
-    private val _selectedDayFilter = MutableStateFlow(0) // 0 = Todos, 1 = Hoy, 2=Lun, 3=Mar...
-    val selectedDayFilter = _selectedDayFilter.asStateFlow()
-
-    private val _selectedFuelType = MutableStateFlow(FuelType.NAFTA_SUPER)
+    private val _selectedFuelType = MutableStateFlow<FuelType?>(null)
     val selectedFuelType = _selectedFuelType.asStateFlow()
 
     private val _fuelSortOption = MutableStateFlow(FuelSortOption.CHEAPEST)
     val fuelSortOption = _fuelSortOption.asStateFlow()
 
-    private val _fuelTankLiters = MutableStateFlow(45)
+    private val _fuelTankLiters = MutableStateFlow(50.0)
     val fuelTankLiters = _fuelTankLiters.asStateFlow()
 
     private val _selectedMapItem = MutableStateFlow<MapItem?>(null)
     val selectedMapItem = _selectedMapItem.asStateFlow()
 
-    // Calculator State
-    private val _calcAmount = MutableStateFlow("45000")
+    private val _calcAmount = MutableStateFlow(1000.0)
     val calcAmount = _calcAmount.asStateFlow()
 
     private val _calcCategory = MutableStateFlow(Category.SUPERMARKET)
     val calcCategory = _calcCategory.asStateFlow()
 
-    data class FuelFilterState(
-        val loc: GeoPoint,
-        val radius: Double,
-        val fuelType: FuelType,
-        val sortOpt: FuelSortOption,
-        val liters: Int,
-        val query: String
-    )
-
-    private val fuelFilterState: StateFlow<FuelFilterState> = combine(
-        combine(currentLocation, searchRadiusKm, selectedFuelType) { loc, radius, fuelType ->
-            Triple(loc, radius, fuelType)
-        },
-        combine(fuelSortOption, fuelTankLiters, searchQuery) { sortOpt, liters, query ->
-            Triple(sortOpt, liters, query)
-        }
-    ) { (loc, radius, fuelType), (sortOpt, liters, query) ->
-        FuelFilterState(loc, radius, fuelType, sortOpt, liters, query)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FuelFilterState(repository.cityZones[0].center, 5.0, FuelType.NAFTA_SUPER, FuelSortOption.CHEAPEST, 45, ""))
-
-    // Filtered Gas Stations Flow
+    // Filtered & computed states
     val filteredStations: StateFlow<List<StationWithDistance>> = combine(
-        fuelFilterState,
+        activeGasStations,
+        currentLocation,
+        searchRadiusKm,
+        selectedFuelType,
         userCards,
-        activeGasStations
-    ) { filter, cards, stationsList ->
-        val list = stationsList.map { station ->
-            val dist = repository.calculateDistanceKm(filter.loc.lat, filter.loc.lng, station.location.lat, station.location.lng)
-            val (discountPct, promoDesc) = repository.getBestPromoForGasStation(station, cards)
-            val basePrice = station.prices[filter.fuelType] ?: 1100.0
-            val effectivePrice = basePrice * (1.0 - discountPct / 100.0)
-            val totalTankRaw = basePrice * filter.liters
-            val totalTankDiscounted = effectivePrice * filter.liters
-            val savings = totalTankRaw - totalTankDiscounted
-
+        selectedTab
+    ) { stations, location, radius, fuelType, cards, _ ->
+        stations.filter { station ->
+            val dist = distanceBetween(location.lat, location.lng, station.location.lat, station.location.lng)
+            dist <= radius
+        }.map { station ->
+            val dist = distanceBetween(location.lat, location.lng, station.location.lat, station.location.lng)
+            val selectedFuel = fuelType ?: FuelType.NAFTA_SUPER
+            val price = station.prices[selectedFuel] ?: 0.0
+            val (discount, promoText) = repository.getBestPromoForGasStation(station, cards)
             StationWithDistance(
                 station = station,
                 distanceKm = dist,
-                selectedFuelPrice = basePrice,
-                cardDiscountPercent = discountPct,
-                cardDiscountPromo = promoDesc,
-                finalPricePerLiter = effectivePrice,
-                tankFillCost = totalTankDiscounted,
-                tankFillSavings = savings
+                selectedFuelPrice = price,
+                cardDiscountPercent = discount,
+                cardDiscountPromo = promoText,
+                finalPricePerLiter = price * (1 - discount / 100),
+                tankFillCost = price * fuelTankLiters.value,
+                tankFillSavings = price * fuelTankLiters.value * (discount / 100)
             )
-        }.filter {
-            it.distanceKm <= (filter.radius * 1.8) &&
-                    (filter.query.isBlank() || it.station.name.contains(filter.query, ignoreCase = true) || it.station.brand.displayName.contains(filter.query, ignoreCase = true) || it.station.address.contains(filter.query, ignoreCase = true))
-        }
-
-        when (filter.sortOpt) {
-            FuelSortOption.CHEAPEST -> list.sortedBy { it.finalPricePerLiter }
-            FuelSortOption.NEAREST -> list.sortedBy { it.distanceKm }
-            FuelSortOption.BEST_DISCOUNT -> list.sortedByDescending { it.cardDiscountPercent }
-        }
+        }.sortedBy { it.distanceKm }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    data class PromoFilterState(
-        val loc: GeoPoint,
-        val radius: Double,
-        val cat: Category?,
-        val myCardsOnly: Boolean,
-        val showAllUnfiltered: Boolean,
-        val selectedBankFilter: String,
-        val selectedBankIds: Set<String>,
-        val dayFilter: Int,
-        val query: String
-    )
-
-    private val promoFilterState: StateFlow<PromoFilterState> = combine(
-        combine(currentLocation, searchRadiusKm, selectedCategory) { loc, radius, cat ->
-            Triple(loc, radius, cat)
-        },
-        combine(_filterMyCardsOnly, _showAllPromotionsUnfiltered, _selectedBankFilter) { myCardsOnly, showAllUnfiltered, bankFilter ->
-            Triple(myCardsOnly, showAllUnfiltered, bankFilter)
-        },
-        combine(_selectedBankIds, _selectedDayFilter, searchQuery) { selectedBankIds, dayFilter, query ->
-            Triple(selectedBankIds, dayFilter, query)
-        }
-    ) { (loc, radius, cat), (myCardsOnly, showAllUnfiltered, bankFilter), (selectedBankIds, dayFilter, query) ->
-        PromoFilterState(loc, radius, cat, myCardsOnly, showAllUnfiltered, bankFilter, selectedBankIds, dayFilter, query)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PromoFilterState(repository.cityZones[0].center, 5.0, null, false, false, "ALL", emptySet(), 0, ""))
-
-    // Filtered Promotions Flow
     val filteredPromotions: StateFlow<List<PromoWithDistance>> = combine(
-        promoFilterState,
-        userCards,
-        activePromotions
-    ) { filter, cards, promoList ->
-        val currentDay = Calendar.getInstance().get(Calendar.DAY_OF_WEEK)
-
-        promoList.map { promo ->
-            val dist = repository.calculateDistanceKm(filter.loc.lat, filter.loc.lng, promo.location.lat, promo.location.lng)
-            val matchesCards = repository.doesPromoMatchUserCards(promo, cards)
-            val isToday = promo.daysValid.contains(currentDay)
-            PromoWithDistance(
-                promo = promo,
-                distanceKm = dist,
-                matchesUserCards = matchesCards,
-                isTodayValid = isToday
-            )
-        }.filter { item ->
-            // If "showAllUnfiltered" is active, bypass all card/bank/category/day restrictions!
-            if (filter.showAllUnfiltered) {
-                return@filter filter.query.isBlank() ||
-                        item.promo.title.contains(filter.query, ignoreCase = true) ||
-                        item.promo.storeName.contains(filter.query, ignoreCase = true) ||
-                        item.promo.bank.displayName.contains(filter.query, ignoreCase = true) ||
-                        item.promo.bank.shortName.contains(filter.query, ignoreCase = true) ||
-                        item.promo.category.displayName.contains(filter.query, ignoreCase = true) ||
-                        item.promo.description.contains(filter.query, ignoreCase = true)
+        activePromotions,
+        currentLocation,
+        searchRadiusKm,
+        searchQuery,
+        selectedCategory,
+        filterMyCardsOnly,
+        selectedDayFilter,
+        showAllPromotionsUnfiltered,
+        selectedBankFilter,
+        userCards
+    ) { promos, location, radius, query, category, filterMyCards, dayFilter, showAll, bankFilter, cards ->
+        var filtered = promos
+        if (!showAll) {
+            filtered = filtered.filter { promo ->
+                val dist = distanceBetween(location.lat, location.lng, promo.location.lat, promo.location.lng)
+                dist <= radius
             }
-
-            val matchesRadius = item.distanceKm <= (filter.radius * 2.2)
-            val matchesCat = filter.cat == null || item.promo.category == filter.cat
-            val matchesMyCards = !filter.myCardsOnly || item.matchesUserCards
-            val matchesSpecificBank = filter.selectedBankFilter == "ALL" || item.promo.bank.id.equals(filter.selectedBankFilter, ignoreCase = true)
-            val matchesDay = when (filter.dayFilter) {
-                0 -> true // Todos los días
-                -1 -> item.isTodayValid // Hoy
-                else -> item.promo.daysValid.contains(filter.dayFilter) // 1=Domingo, 2=Lunes, 3=Martes...
+            if (category != null) {
+                filtered = filtered.filter { it.category == category }
             }
-            val matchesQuery = filter.query.isBlank() ||
-                    item.promo.title.contains(filter.query, ignoreCase = true) ||
-                    item.promo.storeName.contains(filter.query, ignoreCase = true) ||
-                    item.promo.bank.displayName.contains(filter.query, ignoreCase = true) ||
-                    item.promo.bank.shortName.contains(filter.query, ignoreCase = true) ||
-                    item.promo.category.displayName.contains(filter.query, ignoreCase = true) ||
-                    item.promo.description.contains(filter.query, ignoreCase = true)
-
-            matchesRadius && matchesCat && matchesMyCards && matchesSpecificBank && matchesDay && matchesQuery
-        }.sortedWith(
-            compareByDescending<PromoWithDistance> { if (filter.showAllUnfiltered) 0 else (if (it.matchesUserCards) 1 else 0) }
-                .thenByDescending { it.promo.discountPercent }
-                .thenBy { it.distanceKm }
-        )
+            if (query.isNotEmpty()) {
+                filtered = filtered.filter {
+                    it.storeName.contains(query, ignoreCase = true) ||
+                            it.title.contains(query, ignoreCase = true)
+                }
+            }
+            if (filterMyCards) {
+                filtered = filtered.filter { promo ->
+                    repository.doesPromoMatchUserCards(promo, cards)
+                }
+            }
+            if (dayFilter != null) {
+                filtered = filtered.filter { it.daysValid.contains(dayFilter) }
+            }
+            if (bankFilter != null) {
+                filtered = filtered.filter { it.bank == bankFilter || it.bank == Bank.TODOS }
+            }
+        }
+        filtered.map { promo ->
+            val dist = distanceBetween(location.lat, location.lng, promo.location.lat, promo.location.lng)
+            val matches = repository.doesPromoMatchUserCards(promo, cards)
+            val isValid = promo.isValidToday()
+            PromoWithDistance(promo, dist, matches, isValid)
+        }.sortedBy { it.distanceKm }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Purchase Savings Simulation Result
     val savingsSimulationResults: StateFlow<List<CardSavingsRank>> = combine(
-        calcAmount,
-        calcCategory,
         userCards,
-        activePromotions
-    ) { amtStr, cat, cards, promoList ->
-        val amount = amtStr.toDoubleOrNull() ?: 0.0
-        if (amount <= 0.0 || cards.isEmpty()) {
-            emptyList()
-        } else {
-            repository.simulatePurchaseSavings(amount, cat, cards, promoList)
-        }
+        calcAmount,
+        calcCategory
+    ) { cards, amount, cat ->
+        repository.simulatePurchaseSavings(amount, cat, cards)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    init {
-        NotificationHelper.createNotificationChannels(application)
-
-        // Load saved preferences from DataStore
-        viewModelScope.launch {
-            try {
-                userPreferencesRepo.userPreferencesFlow.collect { prefs ->
-                    _filterMyCardsOnly.value = prefs.filterMyCardsOnly
-                    _showAllPromotionsUnfiltered.value = prefs.showAllPromotionsUnfiltered
-                    _selectedBankFilter.value = prefs.selectedBankFilter
-                    _selectedBankIds.value = prefs.selectedBankIds
-                    _isProximityAlertsEnabled.value = prefs.isProximityAlertsEnabled
-                    _searchRadiusKm.value = prefs.searchRadiusKm
-                    _selectedDayFilter.value = prefs.selectedDayFilter
-                    if (prefs.selectedCategoryId != null) {
-                        _selectedCategory.value = Category.fromId(prefs.selectedCategoryId)
-                    }
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "Error loading UserPreferences: ${e.message}")
-            }
-        }
-
-        viewModelScope.launch {
-            try {
-                repository.initDefaultCardsIfEmpty()
-            } catch (e: Throwable) {
-                Log.w(TAG, "Error initializing default cards: ${e.message}")
-            }
-        }
-
-        // Initialize and listen to Firestore
-        viewModelScope.launch {
-            try {
-                firestoreRepository.seedInitialDataIfEmpty(repository.gasStations, repository.promotions)
-            } catch (e: Throwable) {
-                Log.w(TAG, "Firestore initial seed skipped: ${e.message}")
-            }
-        }
-
-        viewModelScope.launch {
-            try {
-                firestoreRepository.getStationsFlow().collect { stationsList ->
-                    if (stationsList.isNotEmpty()) {
-                        _firestoreStations.value = stationsList
-                        _firestoreSyncStatus.value = "Sincronizado: ${stationsList.size} estaciones en Firestore"
-                    }
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "Firestore stations flow error: ${e.message}")
-            }
-        }
-
-        viewModelScope.launch {
-            try {
-                firestoreRepository.getPromotionsFlow().collect { promoList ->
-                    if (promoList.isNotEmpty()) {
-                        _firestorePromotions.value = promoList
-                    }
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "Firestore promotions flow error: ${e.message}")
-            }
-        }
-
-        // Fetch FCM Push Registration Token safely
-        try {
-            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                try {
-                    if (task.isSuccessful) {
-                        val token = task.result
-                        _fcmToken.value = token
-                        Log.d(TAG, "FCM Token acquired: $token")
-                    } else {
-                        _fcmToken.value = AppFirebaseMessagingService.lastToken
-                    }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "FCM Token processing exception: ${e.message}")
-                }
-            }
-        } catch (e: Throwable) {
-            Log.w(TAG, "FirebaseMessaging token retrieval not available: ${e.message}")
-        }
-
-        // Automatic and Continuous Online Search Engine for User Cards & Selected Banks
-        viewModelScope.launch {
-            combine(userCards, _selectedBankIds) { cards, bankIds ->
-                Pair(cards, bankIds)
-            }.collect { (cards, bankIds) ->
-                val allMonitored = bankIds.toMutableSet()
-                cards.forEach { allMonitored.add(it.bankId) }
-                NotificationHelper.syncFCMTopicSubscriptions(allMonitored)
-
-                if (cards.isNotEmpty() || bankIds.isNotEmpty()) {
-                    searchInternetForCardsAndBanks(cards, bankIds, isContinuousMonitoring = false)
-                }
-            }
-        }
-
-        // Continuous background monitoring loop (runs periodically scanning for new deals)
-        viewModelScope.launch {
-            while (true) {
-                delay(60000L) // Scan every 60 seconds
-                val cards = userCards.value
-                val bankIds = _selectedBankIds.value
-                if (cards.isNotEmpty() || bankIds.isNotEmpty()) {
-                    searchInternetForCardsAndBanks(cards, bankIds, isContinuousMonitoring = true)
-                }
-            }
-        }
-    }
-
-    // Actions
     fun setTab(tab: AppTab) {
         _selectedTab.value = tab
     }
 
-    fun setLocation(point: GeoPoint, name: String, isGps: Boolean = false) {
+    fun setLocation(point: GeoPoint, name: String, isGps: Boolean) {
         _currentLocation.value = point
         _locationModeName.value = name
         _isGpsActive.value = isGps
-        _selectedMapItem.value = null
-
-        // Check proximity notification when location changes
-        if (_isProximityAlertsEnabled.value) {
-            proximityAlertManager.checkProximity(point, activeGasStations.value, activePromotions.value)
-        }
-    }
-
-    fun requestDeviceGpsLocation(
-        onSuccess: (GeoPoint) -> Unit = {},
-        onError: (String) -> Unit = {}
-    ) {
-        _isLocationLoading.value = true
-        locationHelper.fetchCurrentLocation(
-            onSuccess = { geoPoint ->
-                _isLocationLoading.value = false
-                _isGpsPermissionGranted.value = true
-                setLocation(geoPoint, "Mi Posición GPS (${geoPoint.name})", isGps = true)
-                _locationErrorMessage.value = null
-                onSuccess(geoPoint)
-            },
-            onError = { error ->
-                _isLocationLoading.value = false
-                _locationErrorMessage.value = error
-                // Fallback to default city zone safely
-                val defaultZone = repository.cityZones[0]
-                setLocation(defaultZone.center, "${defaultZone.name} (Zona Predeterminada)", isGps = false)
-                onError(error)
-            }
-        )
-    }
-
-    fun startContinuousGpsUpdates() {
-        locationHelper.startRealtimeLocationUpdates { geoPoint ->
-            setLocation(geoPoint, "GPS en Vivo: ${geoPoint.name}", isGps = true)
-        }
-    }
-
-    fun stopContinuousGpsUpdates() {
-        locationHelper.stopLocationUpdates()
-    }
-
-    fun setProximityAlertsEnabled(enabled: Boolean) {
-        _isProximityAlertsEnabled.value = enabled
-        proximityAlertManager.isEnabled = enabled
-        viewModelScope.launch {
-            userPreferencesRepo.setProximityAlertsEnabled(enabled)
-        }
-    }
-
-    fun triggerTestProximityAlert(stationName: String = "YPF Full - Palermo Soho", discountPercent: Double = 15.0) {
-        proximityAlertManager.sendTestNotification(stationName, discountPercent)
-    }
-
-    fun triggerTestPushNotification(title: String, body: String) {
-        NotificationHelper.showPushNotification(
-            context = getApplication(),
-            title = title,
-            body = body,
-            data = mapOf("action" to "FUEL_OFFER_ALERT")
-        )
-    }
-
-    fun syncDataWithFirestore() {
-        viewModelScope.launch {
-            _firestoreSyncStatus.value = "Sincronizando con Firestore..."
-            try {
-                for (station in repository.gasStations) {
-                    firestoreRepository.saveGasStation(station)
-                }
-                for (promo in repository.promotions) {
-                    firestoreRepository.savePromotion(promo)
-                }
-                _firestoreSyncStatus.value = "¡Sincronización completada con éxito en la nube!"
-            } catch (e: Exception) {
-                _firestoreSyncStatus.value = "Error al sincronizar: ${e.message}"
-            }
-        }
     }
 
     fun setRadius(km: Double) {
         _searchRadiusKm.value = km
-        viewModelScope.launch {
-            userPreferencesRepo.setSearchRadiusKm(km)
-        }
     }
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
     }
 
-    fun setCategory(category: Category?) {
-        _selectedCategory.value = category
-        viewModelScope.launch {
-            userPreferencesRepo.setSelectedCategoryId(category?.id)
-        }
+    fun setCategory(cat: Category?) {
+        _selectedCategory.value = cat
     }
 
-    fun setFilterMyCardsOnly(enabled: Boolean) {
-        _filterMyCardsOnly.value = enabled
-        if (enabled) {
-            _showAllPromotionsUnfiltered.value = false
-        }
-        viewModelScope.launch {
-            userPreferencesRepo.setFilterMyCardsOnly(enabled)
-            if (enabled) {
-                userPreferencesRepo.setShowAllPromotionsUnfiltered(false)
-            }
-        }
+    fun setFilterMyCardsOnly(filter: Boolean) {
+        _filterMyCardsOnly.value = filter
     }
 
-    fun setShowAllPromotionsUnfiltered(enabled: Boolean) {
-        _showAllPromotionsUnfiltered.value = enabled
-        if (enabled) {
-            _filterMyCardsOnly.value = false
-        }
-        viewModelScope.launch {
-            userPreferencesRepo.setShowAllPromotionsUnfiltered(enabled)
-            if (enabled) {
-                userPreferencesRepo.setFilterMyCardsOnly(false)
-            }
-        }
+    fun setDayFilter(day: Int?) {
+        _selectedDayFilter.value = day
     }
 
-    fun setSelectedBankFilter(bankId: String) {
-        _selectedBankFilter.value = bankId
-        viewModelScope.launch {
-            userPreferencesRepo.setSelectedBankFilter(bankId)
-        }
+    fun setShowAllPromotionsUnfiltered(show: Boolean) {
+        _showAllPromotionsUnfiltered.value = show
+    }
+
+    fun setSelectedBankFilter(bank: Bank?) {
+        _selectedBankFilter.value = bank
+    }
+
+    fun setSelectedBankIds(ids: Set<String>) {
+        _selectedBankIds.value = ids
     }
 
     fun toggleBankSelection(bankId: String) {
-        val current = _selectedBankIds.value.toMutableSet()
-        if (current.contains(bankId)) {
-            current.remove(bankId)
-        } else {
-            current.add(bankId)
-        }
-        _selectedBankIds.value = current
-        viewModelScope.launch {
-            userPreferencesRepo.toggleBankSelection(bankId)
+        _selectedBankIds.update { currentSet ->
+            if (currentSet.contains(bankId)) {
+                currentSet - bankId
+            } else {
+                currentSet + bankId
+            }
         }
     }
 
-    fun setSelectedBankIds(bankIds: Set<String>) {
-        _selectedBankIds.value = bankIds
-        viewModelScope.launch {
-            userPreferencesRepo.setSelectedBankIds(bankIds)
-        }
-    }
-
-    fun clearAllFilters() {
-        _showAllPromotionsUnfiltered.value = false
-        _filterMyCardsOnly.value = false
-        _selectedCategory.value = null
-        _selectedDayFilter.value = 0
-        _selectedBankFilter.value = "ALL"
-        _searchQuery.value = ""
-        viewModelScope.launch {
-            userPreferencesRepo.setShowAllPromotionsUnfiltered(false)
-            userPreferencesRepo.setFilterMyCardsOnly(false)
-            userPreferencesRepo.setSelectedCategoryId(null)
-            userPreferencesRepo.setSelectedDayFilter(0)
-            userPreferencesRepo.setSelectedBankFilter("ALL")
-        }
-    }
-
-    fun setDayFilter(dayIndex: Int) {
-        _selectedDayFilter.value = dayIndex
-        viewModelScope.launch {
-            userPreferencesRepo.setSelectedDayFilter(dayIndex)
-        }
-    }
-
-    fun setFuelType(type: FuelType) {
-        _selectedFuelType.value = type
+    fun setFuelType(fuelType: FuelType?) {
+        _selectedFuelType.value = fuelType
     }
 
     fun setFuelSortOption(option: FuelSortOption) {
         _fuelSortOption.value = option
     }
 
-    fun setFuelTankLiters(liters: Int) {
+    fun setFuelTankLiters(liters: Double) {
         _fuelTankLiters.value = liters
     }
 
@@ -704,7 +392,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _selectedMapItem.value = item
     }
 
-    fun setCalcAmount(amount: String) {
+    fun setCalcAmount(amount: Double) {
         _calcAmount.value = amount
     }
 
@@ -712,105 +400,99 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _calcCategory.value = cat
     }
 
-    fun addCard(bank: Bank, cardType: CardType, cardNetwork: CardNetwork, cardName: String, last4: String) {
+    fun requestDeviceGpsLocation(onSuccess: ((GeoPoint) -> Unit)? = null, onError: ((String) -> Unit)? = null) {
+        _isLocationLoading.value = true
+        locationHelper.requestLocationUpdates(
+            onLocationUpdate = { latitude, longitude, locationName ->
+                _currentLocation.value = GeoPoint(latitude, longitude, locationName)
+                _locationModeName.value = locationName
+                _isGpsActive.value = true
+                _isLocationLoading.value = false
+                onSuccess?.invoke(GeoPoint(latitude, longitude, locationName))
+            },
+            onError = { error ->
+                _isLocationLoading.value = false
+                _locationErrorMessage.value = error
+                onError?.invoke(error)
+            }
+        )
+    }
+
+    fun addCard(bank: Bank, cardType: CardType, network: CardNetwork, name: String, last4: String) {
         viewModelScope.launch {
-            repository.addCard(bank, cardType, cardNetwork, cardName, last4)
-            // Immediately scan the internet for active promotions on this card
-            triggerImmediateCardSearch(bank, cardType, cardNetwork)
+            val entity = UserCardEntity(
+                cardName = name,
+                bankId = bank.id,
+                bankName = bank.displayName,
+                cardType = cardType.name,
+                cardNetwork = network.name,
+                last4Digits = last4
+            )
+            repository.saveCard(entity)
+            triggerManualInternetSearch()
         }
     }
 
-    fun triggerImmediateCardSearch(bank: Bank, cardType: CardType, cardNetwork: CardNetwork) {
-        viewModelScope.launch {
-            _internetSearchState.update {
-                it.copy(
-                    isSearching = true,
-                    lastSearchedBank = bank.displayName,
-                    statusMessage = "🔍 Buscando inmediatamente en internet promociones vigentes para ${bank.displayName} (${cardType.displayName} ${cardNetwork.displayName})..."
-                )
-            }
-
-            try {
-                val discovered = repository.searchAndAddOnlinePromosForCard(
-                    bank = bank,
-                    cardType = cardType,
-                    cardNetwork = cardNetwork,
-                    userLocation = currentLocation.value
-                )
-
-                val sdf = SimpleDateFormat("HH:mm:ss", Locale("es", "AR"))
-                val currentTimeStr = sdf.format(Date())
-
-                _internetSearchState.update {
-                    it.copy(
-                        isSearching = false,
-                        totalOnlinePromosFound = repository.dynamicOnlinePromotions.value.size,
-                        lastSearchTime = currentTimeStr,
-                        statusMessage = "✨ ¡${discovered.size} ofertas y promociones encontradas en internet para ${bank.displayName}!",
-                        newlyFoundCount = discovered.size,
-                        latestFoundPromos = discovered
-                    )
-                }
-
-                // Show in-app push notification
-                if (discovered.isNotEmpty()) {
-                    NotificationHelper.showPushNotification(
-                        context = getApplication(),
-                        title = "🔍 Nuevas ofertas encontradas en internet",
-                        body = "${discovered.size} promociones vigentes detectadas para tu tarjeta ${bank.shortName} (${cardType.displayName})",
-                        data = mapOf("action" to "NEW_ONLINE_PROMOS", "bank" to bank.id)
-                    )
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in immediate card search: ${e.message}")
-                _internetSearchState.update {
-                    it.copy(
-                        isSearching = false,
-                        statusMessage = "Promociones sincronizadas para ${bank.displayName}"
-                    )
-                }
-            }
-        }
+    fun clearAllFilters() {
+        _searchQuery.value = ""
+        _selectedCategory.value = null
+        _filterMyCardsOnly.value = false
+        _selectedDayFilter.value = null
+        _selectedBankFilter.value = null
     }
 
     fun searchInternetForCardsAndBanks(
-        cards: List<UserCardEntity> = userCards.value,
-        bankIds: Set<String> = _selectedBankIds.value,
+        cards: List<UserCardEntity>,
+        selectedBankIds: Set<String>,
         isContinuousMonitoring: Boolean = false
     ) {
         viewModelScope.launch {
-            _internetSearchState.update {
-                it.copy(
-                    isSearching = true,
-                    statusMessage = if (isContinuousMonitoring)
-                        "🌐 Monitoreando en vivo promociones bancarias vigentes en internet..."
-                    else
-                        "🔍 Buscando ofertas online en vivo para tarjetas y bancos seleccionados..."
-                )
-            }
-
-            try {
-                val location = currentLocation.value
-                val discovered = repository.searchOnlineForCardsAndBanks(cards, bankIds, location)
-                val sdf = SimpleDateFormat("HH:mm:ss", Locale("es", "AR"))
-                val currentTimeStr = sdf.format(Date())
-
-                _internetSearchState.update { current ->
-                    current.copy(
-                        isSearching = false,
-                        totalOnlinePromosFound = repository.dynamicOnlinePromotions.value.size,
-                        lastSearchTime = currentTimeStr,
-                        statusMessage = "✅ ${repository.dynamicOnlinePromotions.value.size} promociones online sincronizadas en vivo",
-                        newlyFoundCount = discovered.size,
-                        latestFoundPromos = discovered
-                    )
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in continuous internet search: ${e.message}")
+            if (cards.isEmpty() && selectedBankIds.isEmpty()) {
                 _internetSearchState.update {
                     it.copy(
                         isSearching = false,
-                        statusMessage = "🌐 Monitoreo continuo de promociones activo"
+                        lastSearchTime = Calendar.getInstance().time,
+                        statusMessage = "No hay tarjetas registradas para buscar"
+                    )
+                }
+                return@launch
+            }
+
+            _internetSearchState.update { it.copy(isSearching = true, statusMessage = "🔍 Buscando promociones...") }
+
+            try {
+                val foundPromos = mutableListOf<Promotion>()
+
+                // Search by registered cards
+                if (cards.isNotEmpty()) {
+                    val searchResults = repository.searchOnlineForCards(cards, currentLocation.value)
+                    foundPromos.addAll(searchResults)
+                }
+
+                // Search by selected banks (even without cards)
+                if (selectedBankIds.isNotEmpty()) {
+                    val bankResults = repository.searchOnlineForCardsAndBanks(
+                        cards.filter { selectedBankIds.contains(it.bankId) },
+                        selectedBankIds,
+                        currentLocation.value
+                    )
+                    foundPromos.addAll(bankResults)
+                }
+
+                _internetSearchState.update {
+                    it.copy(
+                        isSearching = false,
+                        lastSearchTime = Calendar.getInstance().time,
+                        foundCount = foundPromos.size,
+                        statusMessage = if (isContinuousMonitoring) "🌐 Monitoreo continuo de promociones activo" else "✓ Búsqueda completada"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error searching internet for promos: ${e.message}")
+                _internetSearchState.update {
+                    it.copy(
+                        isSearching = false,
+                        statusMessage = "⚠️ Error en búsqueda: ${e.message}"
                     )
                 }
             }
@@ -864,6 +546,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // Helper function to check if a promo matches user cards
+    private fun doesPromoMatchCards(promo: Promotion): Boolean {
+        return repository.doesPromoMatchUserCards(promo, userCards.value)
+    }
+
     fun testMatchingPushNotification(targetPromo: Promotion? = null) {
         val promo = targetPromo ?: activePromotions.value.firstOrNull { doesPromoMatchCards(it) }
             ?: activePromotions.value.firstOrNull()
@@ -903,9 +590,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun triggerTestProximityAlert() {
+        val nearestStation = filteredStations.value.firstOrNull() ?: return
+        NotificationHelper.showProximityAlert(
+            context = getApplication(),
+            stationName = nearestStation.station.name,
+            promoText = nearestStation.cardDiscountPromo ?: "Descuento disponible",
+            distanceKm = nearestStation.distanceKm,
+            discountPercent = nearestStation.cardDiscountPercent
+        )
+    }
+
+    fun syncDataWithFirestore() {
+        viewModelScope.launch {
+            try {
+                _firestoreSyncStatus.value = "📤 Sincronizando..."
+                firestoreRepository.uploadUserCards(userCards.value)
+                firestoreRepository.uploadFavorites(favoriteIds.value)
+                _firestoreSyncStatus.value = "✓ Sincronización completada"
+            } catch (e: Exception) {
+                _firestoreSyncStatus.value = "⚠️ Error en sincronización"
+                Log.e(TAG, "Sync error: ${e.message}")
+            }
+        }
+    }
+
+    fun setProximityAlertsEnabled(enabled: Boolean) {
+        _isProximityAlertsEnabled.value = enabled
+        if (enabled) {
+            proximityAlertManager.startMonitoring(filteredStations.value.map { it.station })
+        } else {
+            proximityAlertManager.stopMonitoring()
+        }
+    }
+
+    private fun distanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = kotlin.math.sin(dLat / 2) * kotlin.math.sin(dLat / 2) +
+                kotlin.math.cos(Math.toRadians(lat1)) * kotlin.math.cos(Math.toRadians(lat2)) *
+                kotlin.math.sin(dLon / 2) * kotlin.math.sin(dLon / 2)
+        val c = 2 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1 - a))
+        return r * c
+    }
+
     override fun onCleared() {
         super.onCleared()
         locationHelper.stopLocationUpdates()
     }
 }
-
