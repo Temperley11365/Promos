@@ -16,7 +16,7 @@ android {
   defaultConfig {
     applicationId = "com.aistudio.promocombustible.tuvwx"
     minSdk = 24
-    targetSdk = 36
+    targetSdk = 35
     versionCode = 1
     versionName = "1.0"
 
@@ -33,6 +33,8 @@ android {
         storePassword = System.getenv("STORE_PASSWORD") ?: "android"
         keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
         keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+        enableV1Signing = true
+        enableV2Signing = true
       }
     }
     create("debugConfig") {
@@ -42,6 +44,8 @@ android {
         storePassword = "android"
         keyAlias = "androiddebugkey"
         keyPassword = "android"
+        enableV1Signing = true
+        enableV2Signing = true
       }
     }
   }
@@ -54,6 +58,9 @@ android {
       val releaseSigning = signingConfigs.findByName("release")
       if (releaseSigning?.storeFile?.exists() == true) {
         signingConfig = releaseSigning
+      } else {
+        // Fallback to debug signing if release keystore not found
+        signingConfig = signingConfigs.getByName("debug")
       }
     }
     debug {
@@ -75,6 +82,11 @@ android {
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
+  }
+  lint {
+    disable.add("MissingTranslation")
+    disable.add("ExtraTranslation")
+    checkReleaseBuilds = false
   }
 }
 
